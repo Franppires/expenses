@@ -20,6 +20,34 @@
   let db = null;
   let pushTimer = null;
   let pendingMonths = new Map();
+  let backgroundSyncPromise = null;
+
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          const err = new Error("Sync timeout");
+          err.code = "deadline-exceeded";
+          reject(err);
+        }, ms);
+      }),
+    ]);
+  }
+
+  function prepareLocalData(user) {
+    migrateLegacyLocalToUser(user.uid);
+    if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
+    if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
+  }
+
+  function openApp(user) {
+    hideAuth();
+    setAuthLoading(false);
+    const emailEl = $("#userEmail");
+    if (emailEl) emailEl.textContent = user.email || "Conta";
+    if (window.MinhasDespesasInit) window.MinhasDespesasInit(user.uid, user.email);
+  }
 
   function $(sel) {
     return document.querySelector(sel);
@@ -78,11 +106,7 @@
     }
     auth = firebase.auth();
     db = firebase.firestore();
-    db.settings({
-      ignoreUndefinedProperties: true,
-      experimentalForceLongPolling: true,
-      merge: true,
-    });
+    db.settings({ ignoreUndefinedProperties: true });
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
     return true;
   }
@@ -112,7 +136,10 @@
       return "Sem internet — tente de novo quando estiver online";
     }
     if (code === "failed-precondition") {
-      return "Firestore indisponível neste aparelho — tocando em Sincronizar";
+      return "Firestore indisponível — toque em Sincronizar";
+    }
+    if (code === "deadline-exceeded") {
+      return "Nuvem demorou — dados locais ok, toque em Sincronizar";
     }
     return "Nuvem indisponível — toque em Sincronizar";
   }
@@ -231,23 +258,37 @@
   }
 
   async function runFullSync(user) {
-    migrateLegacyLocalToUser(user.uid);
-    if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
     setSyncStatus("Baixando seus dados…", true);
-    await pullFromCloud(user.uid);
+    await withTimeout(pullFromCloud(user.uid), 15000);
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
     if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
-    await uploadLocalMonths(user.uid);
+    setSyncStatus("Enviando para nuvem…", true);
+    await withTimeout(uploadLocalMonths(user.uid), 15000);
     setSyncStatus("Sincronizado", true);
+    if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
+  }
+
+  function startBackgroundSync(user) {
+    if (backgroundSyncPromise) return backgroundSyncPromise;
+    backgroundSyncPromise = runFullSync(user)
+      .catch((e) => {
+        console.error(e);
+        setSyncStatus(syncErrorMessage(e), false);
+      })
+      .finally(() => {
+        backgroundSyncPromise = null;
+      });
+    return backgroundSyncPromise;
   }
 
   async function retrySync() {
     const user = auth?.currentUser;
     if (!user || !db) return false;
-    setSyncStatus("Sincronizando…", true);
+    if (backgroundSyncPromise) {
+      try { await backgroundSyncPromise; } catch (_) { /* ignore */ }
+    }
     try {
-      await runFullSync(user);
-      if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
+      await withTimeout(runFullSync(user), 30000);
       return true;
     } catch (e) {
       console.error(e);
@@ -276,28 +317,11 @@
   }
 
   async function onUserSignedIn(user) {
-    setAuthLoading(true);
     setAuthError("");
-    try {
-      await runFullSync(user);
-      hideAuth();
-      const emailEl = $("#userEmail");
-      if (emailEl) emailEl.textContent = user.email || "Conta";
-      if (window.MinhasDespesasInit) window.MinhasDespesasInit(user.uid, user.email);
-    } catch (e) {
-      console.error(e);
-      migrateLegacyLocalToUser(user.uid);
-      if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
-      if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
-      setSyncStatus(syncErrorMessage(e), false);
-      hideAuth();
-      const emailEl = $("#userEmail");
-      if (emailEl) emailEl.textContent = user.email || "Conta";
-      if (window.MinhasDespesasInit) window.MinhasDespesasInit(user.uid, user.email);
-      retrySync().catch(() => {});
-    } finally {
-      setAuthLoading(false);
-    }
+    setAuthLoading(true);
+    prepareLocalData(user);
+    openApp(user);
+    startBackgroundSync(user);
   }
 
   function onUserSignedOut() {
