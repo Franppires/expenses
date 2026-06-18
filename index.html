@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#4f46e5" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Despesas" />
+  <meta name="description" content="Controle de gastos, contas e renda." />
+  <title>Minhas despesas</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="authScreen" class="auth-screen" aria-label="Entrar na conta">
+    <div class="auth-card">
+      <div class="brand-mark auth-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+      </div>
+      <h1 class="auth-title">Minhas despesas</h1>
+      <p class="auth-sub">Entre na sua conta para ver os mesmos dados no celular e no computador.</p>
+
+      <div id="authSetup" class="auth-setup hidden">
+        <p><strong>Primeira vez?</strong> Configure a nuvem (grátis) em <code>js/firebase-config.js</code>:</p>
+        <ol class="auth-steps">
+          <li>Crie um projeto em <a href="https://console.firebase.google.com" target="_blank" rel="noopener">Firebase Console</a></li>
+          <li>Ative <strong>Authentication → E-mail/senha</strong></li>
+          <li>Crie <strong>Firestore Database</strong></li>
+          <li>Copie as chaves do app Web para <code>firebase-config.js</code></li>
+          <li>Defina <code>configured: true</code></li>
+        </ol>
+        <p class="hint">As regras de segurança do Firestore estão no arquivo <code>js/cloud.js</code>.</p>
+      </div>
+
+      <form id="authForm" class="auth-form">
+        <label class="field-label" for="authEmail">E-mail</label>
+        <input type="email" id="authEmail" autocomplete="username" required placeholder="seu@email.com" />
+
+        <label class="field-label" for="authPassword">Senha</label>
+        <input type="password" id="authPassword" autocomplete="current-password" required minlength="6" placeholder="Mínimo 6 caracteres" />
+
+        <p id="authError" class="auth-error" hidden></p>
+
+        <button type="submit" class="btn btn-primary auth-submit">Entrar</button>
+        <button type="button" class="btn btn-ghost" id="btnSignUp">Criar conta</button>
+      </form>
+
+      <div id="authLoading" class="auth-loading hidden">
+        <p>Sincronizando seus dados…</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="appRoot" class="hidden">
+  <div class="app-shell">
+    <header class="app-top">
+      <div>
+        <h1>Minhas despesas</h1>
+        <p id="headerSubtitle">Controle financeiro pessoal</p>
+        <p id="syncStatus" class="sync-status" aria-live="polite"></p>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="btnLogout" title="Sair">Sair</button>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+          </svg>
+        </div>
+      </div>
+    </header>
+
+    <div class="month-bar">
+      <label class="field-label" for="refMonth">Mês de referência</label>
+      <input type="month" id="refMonth" aria-label="Mês de referência" />
+    </div>
+
+    <!-- INÍCIO -->
+    <section id="view-home" class="view active" aria-label="Início">
+      <div id="heroAsk" class="hero-card need">
+        <div class="hero-label">Quanto pedir ao marido</div>
+        <div class="hero-value">R$ <span id="heroAskVal">0,00</span></div>
+        <p class="hero-note">Com base em <strong>todas as despesas programadas</strong> menos <strong>toda a renda</strong> do mês.</p>
+      </div>
+      <div class="metric-grid" id="homeMetrics"></div>
+      <div class="card" style="margin-top:0.8rem">
+        <div class="card-head"><h2>Próximos vencimentos</h2><span>Pendentes</span></div>
+        <div id="upcomingList" class="tx-list"></div>
+      </div>
+    </section>
+
+    <!-- EXTRATO -->
+    <section id="view-statement" class="view" aria-label="Extrato">
+      <div class="card">
+        <div class="card-head"><h2>Extrato do mês</h2><span id="statementMonthLabel">—</span></div>
+        <p class="hint" style="margin:0 0 0.75rem">Todas as entradas e saídas do mês, por data. Abono é <strong>1x por ano</strong> (no seu caso, em maio).</p>
+        <div class="stmt-wrap">
+          <table class="stmt-table" aria-label="Extrato financeiro do mês">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Descrição</th>
+                <th>Situação</th>
+                <th>Valor</th>
+              </tr>
+            </thead>
+            <tbody id="statementBody"></tbody>
+            <tfoot id="statementFoot"></tfoot>
+          </table>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btnExportCsvStmt">Exportar extrato (CSV)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONTAS -->
+    <section id="view-bills" class="view" aria-label="Contas">
+      <div class="card">
+        <div class="card-head"><h2>Contas do mês</h2><span>Fixas e variáveis</span></div>
+        <p class="hint" style="margin:0 0 0.75rem">
+          <strong>Fixas:</strong> empréstimo, das, condomínio, financiamento.
+          <strong>Variáveis:</strong> luz e cartão (mudam todo mês).
+        </p>
+        <div id="billsList"></div>
+        <div id="billsTotals"></div>
+      </div>
+    </section>
+
+    <!-- RENDA -->
+    <section id="view-income" class="view" aria-label="Renda">
+      <div class="card">
+        <div class="card-head"><h2>Entradas do mês</h2><span>Renda</span></div>
+        <div id="incomeList" class="tx-list"></div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btnAddIncome">+ Nova entrada</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GASTOS EXTRAS -->
+    <section id="view-extras" class="view" aria-label="Outros gastos">
+      <div class="card">
+        <div class="card-head"><h2>Outros gastos</h2><span>Variáveis</span></div>
+        <p class="hint" style="margin:0 0 0.75rem">Pontuais: veterinário, faxineira, cozinheira, compras — tudo que não é conta mensal.</p>
+        <div id="extrasList" class="tx-list"></div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btnAddExtra">+ Novo gasto</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROJEÇÃO -->
+    <section id="view-projection" class="view" aria-label="Projeção">
+      <div class="card">
+        <div class="card-head"><h2>Projeção</h2><span>6 meses</span></div>
+        <p class="hint" style="margin:0 0 0.75rem">Toque <strong>Editar</strong> para ajustar <strong>cada valor</strong> de um mês futuro (ex.: cartão diferente).</p>
+        <div class="proj-table-wrap">
+          <table class="proj-table">
+            <thead>
+              <tr>
+                <th>Mês</th>
+                <th>Despesas</th>
+                <th>Renda</th>
+                <th>A pedir</th>
+                <th>Sobra</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="projectionBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- DADOS / INTEGRAÇÃO -->
+    <section id="view-data" class="view" aria-label="Dados e integração">
+      <div class="card">
+        <div class="card-head"><h2>Sua conta</h2><span>Nuvem</span></div>
+        <p class="hint" id="userEmail">—</p>
+        <p class="hint">Os dados são salvos na nuvem vinculados ao seu login. Ao entrar em outro aparelho, tudo aparece igual.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btnLogoutData">Sair da conta</button>
+        </div>
+      </div>
+      <div class="card integration-card">
+        <div class="card-head"><h2>Recuperar neste aparelho</h2><span>Backup local</span></div>
+        <p>Se algo sumiu depois do login, busca meses salvos antes na memória deste navegador e restaura na sua conta.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btnRecoverLocal">Recuperar dados locais</button>
+        </div>
+      </div>
+      <div class="card integration-card">
+        <div class="card-head"><h2>Backup</h2><span>Integração</span></div>
+        <p>Exporte seus dados para guardar ou abrir no Excel. Importe de volta em outro navegador ou após trocar de PC.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btnExportJson">Exportar JSON</button>
+          <button type="button" class="btn btn-ghost" id="btnExportCsv">Exportar CSV</button>
+        </div>
+      </div>
+      <div class="card integration-card">
+        <div class="card-head"><h2>Restaurar</h2><span>Importar</span></div>
+        <p>Selecione um arquivo <strong>.json</strong> exportado deste app.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btnImportJson">Importar JSON</button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden />
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Resumo técnico</h2></div>
+        <p class="hint" id="dataStats">—</p>
+      </div>
+    </section>
+  </div>
+  </div>
+
+  <nav class="bottom-nav hidden" aria-label="Menu principal">
+    <div class="bottom-nav-inner">
+      <button type="button" class="nav-btn active" data-view="home" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>
+        Início
+      </button>
+      <button type="button" class="nav-btn" data-view="statement">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg>
+        Extrato
+      </button>
+      <button type="button" class="nav-btn" data-view="bills">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+        Contas
+      </button>
+      <button type="button" class="nav-btn" data-view="income">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        Renda
+      </button>
+      <button type="button" class="nav-btn" data-view="extras">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+        Gastos
+      </button>
+      <button type="button" class="nav-btn" data-view="projection">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        Futuro
+      </button>
+      <button type="button" class="nav-btn" data-view="data">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+        Dados
+      </button>
+    </div>
+  </nav>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/cloud.js"></script>
+  <script src="js/pwa.js"></script>
+</body>
+</html>
