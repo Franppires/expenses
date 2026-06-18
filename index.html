@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#4f46e5" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -90,7 +90,7 @@
         <p class="hero-note">Com base em <strong>todas as despesas programadas</strong> menos <strong>toda a renda</strong> do mês.</p>
       </div>
       <div class="metric-grid" id="homeMetrics"></div>
-      <div class="card" style="margin-top:0.8rem">
+      <div class="card card--spaced">
         <div class="card-head"><h2>Próximos vencimentos</h2><span>Pendentes</span></div>
         <div id="upcomingList" class="tx-list"></div>
       </div>
@@ -131,8 +131,8 @@
         </p>
         <div id="billsList"></div>
         <div id="billsTotals"></div>
-        <div class="btn-row">
-          <button type="button" class="btn btn-ghost" id="btnAddBill">+ Nova conta</button>
+        <div class="btn-row btn-row--add">
+          <button type="button" class="btn btn-add" id="btnAddBill">+ Nova conta</button>
         </div>
       </div>
     </section>
@@ -142,8 +142,8 @@
       <div class="card">
         <div class="card-head"><h2>Entradas do mês</h2><span>Renda</span></div>
         <div id="incomeList" class="tx-list"></div>
-        <div class="btn-row">
-          <button type="button" class="btn btn-ghost" id="btnAddIncome">+ Nova entrada</button>
+        <div class="btn-row btn-row--add">
+          <button type="button" class="btn btn-add" id="btnAddIncome">+ Nova entrada</button>
         </div>
       </div>
     </section>
@@ -154,8 +154,8 @@
         <div class="card-head"><h2>Outros gastos</h2><span>Variáveis</span></div>
         <p class="hint" style="margin:0 0 0.75rem">Pontuais: veterinário, faxineira, cozinheira, compras — tudo que não é conta mensal.</p>
         <div id="extrasList" class="tx-list"></div>
-        <div class="btn-row">
-          <button type="button" class="btn btn-ghost" id="btnAddExtra">+ Novo gasto</button>
+        <div class="btn-row btn-row--add">
+          <button type="button" class="btn btn-add" id="btnAddExtra">+ Novo gasto</button>
         </div>
       </div>
     </section>
