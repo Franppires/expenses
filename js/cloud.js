@@ -56,6 +56,8 @@
     el.textContent = text;
     el.classList.toggle("sync-ok", !!ok);
     el.classList.toggle("sync-warn", !ok);
+    const showRetry = !ok && text && auth?.currentUser;
+    $("#btnRetrySync")?.classList.toggle("hidden", !showRetry);
   }
 
   function firebaseReady() {
@@ -76,7 +78,43 @@
     }
     auth = firebase.auth();
     db = firebase.firestore();
+    db.settings({
+      ignoreUndefinedProperties: true,
+      experimentalForceLongPolling: true,
+      merge: true,
+    });
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
     return true;
+  }
+
+  function stripCloudMeta(data) {
+    if (!data || typeof data !== "object") return data;
+    const out = JSON.parse(JSON.stringify(data, (_, v) => {
+      if (v && typeof v === "object" && typeof v.seconds === "number" && typeof v.nanoseconds === "number") {
+        return null;
+      }
+      return v;
+    }));
+    delete out.updatedAt;
+    return out;
+  }
+
+  function sanitizeForFirestore(data) {
+    return JSON.parse(JSON.stringify(data, (_, v) => (v === undefined ? null : v)));
+  }
+
+  function syncErrorMessage(err) {
+    const code = err?.code || "";
+    if (code === "permission-denied") {
+      return "Sem permissão no Firestore — publique as regras no Firebase Console";
+    }
+    if (code === "unavailable" || code === "network-request-failed") {
+      return "Sem internet — tente de novo quando estiver online";
+    }
+    if (code === "failed-precondition") {
+      return "Firestore indisponível neste aparelho — tocando em Sincronizar";
+    }
+    return "Nuvem indisponível — toque em Sincronizar";
   }
 
   function migrateLegacyLocalToUser(uid) {
@@ -126,7 +164,7 @@
     const prefix = "minhas-despesas-v2:" + uid + ":";
     monthsSnap.forEach((doc) => {
       const key = prefix + doc.id;
-      const cloudData = doc.data();
+      const cloudData = stripCloudMeta(doc.data());
       const localRaw = localStorage.getItem(key);
       if (!localRaw) {
         localStorage.setItem(key, JSON.stringify(cloudData));
@@ -150,7 +188,7 @@
 
   async function pushMonthToCloud(uid, ym, data) {
     await db.collection("users").doc(uid).collection("months").doc(ym).set({
-      ...data,
+      ...sanitizeForFirestore(data),
       version: 2,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     });
@@ -170,21 +208,52 @@
 
   async function uploadLocalMonths(uid) {
     const prefix = "minhas-despesas-v2:" + uid + ":";
-    const batch = db.batch();
     let count = 0;
-    Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith(prefix)) {
-        const ym = key.slice(prefix.length);
-        if (/^\d{4}-\d{2}$/.test(ym)) {
-          const ref = db.collection("users").doc(uid).collection("months").doc(ym);
-          batch.set(ref, JSON.parse(localStorage.getItem(key)));
-          count++;
-        }
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(prefix)) continue;
+      const ym = key.slice(prefix.length);
+      if (!/^\d{4}-\d{2}$/.test(ym)) continue;
+      try {
+        const data = sanitizeForFirestore(JSON.parse(localStorage.getItem(key)));
+        await db.collection("users").doc(uid).collection("months").doc(ym).set({
+          ...data,
+          version: 2,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        count++;
+      } catch (e) {
+        console.error("upload month", ym, e);
+        throw e;
       }
-    });
-    if (count > 0) await batch.commit();
+    }
     await pushPatchesToCloud(uid);
     return count;
+  }
+
+  async function runFullSync(user) {
+    migrateLegacyLocalToUser(user.uid);
+    if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
+    setSyncStatus("Baixando seus dados…", true);
+    await pullFromCloud(user.uid);
+    if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
+    if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
+    await uploadLocalMonths(user.uid);
+    setSyncStatus("Sincronizado", true);
+  }
+
+  async function retrySync() {
+    const user = auth?.currentUser;
+    if (!user || !db) return false;
+    setSyncStatus("Sincronizando…", true);
+    try {
+      await runFullSync(user);
+      if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setSyncStatus(syncErrorMessage(e), false);
+      return false;
+    }
   }
 
   function flushPendingPush(uid) {
@@ -210,31 +279,22 @@
     setAuthLoading(true);
     setAuthError("");
     try {
-      migrateLegacyLocalToUser(user.uid);
-      if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
-      setSyncStatus("Baixando seus dados…", true);
-      await pullFromCloud(user.uid);
-      if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
-      if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
-      await uploadLocalMonths(user.uid);
+      await runFullSync(user);
       hideAuth();
       const emailEl = $("#userEmail");
       if (emailEl) emailEl.textContent = user.email || "Conta";
-      setSyncStatus("Sincronizado", true);
       if (window.MinhasDespesasInit) window.MinhasDespesasInit(user.uid, user.email);
     } catch (e) {
       console.error(e);
       migrateLegacyLocalToUser(user.uid);
       if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
       if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
-      setSyncStatus("Dados locais — nuvem indisponível", false);
+      setSyncStatus(syncErrorMessage(e), false);
       hideAuth();
+      const emailEl = $("#userEmail");
+      if (emailEl) emailEl.textContent = user.email || "Conta";
       if (window.MinhasDespesasInit) window.MinhasDespesasInit(user.uid, user.email);
-      uploadLocalMonths(user.uid).then(() => {
-        setSyncStatus("Salvo na nuvem", true);
-      }).catch(() => {
-        setSyncStatus("Dados neste aparelho — sync pendente", false);
-      });
+      retrySync().catch(() => {});
     } finally {
       setAuthLoading(false);
     }
@@ -307,6 +367,8 @@
     $("#btnLogoutData")?.addEventListener("click", () => {
       if (auth) auth.signOut();
     });
+    $("#btnRetrySync")?.addEventListener("click", () => retrySync());
+    $("#btnRetrySyncData")?.addEventListener("click", () => retrySync());
   }
 
   function showSetupInstructions() {
@@ -330,6 +392,7 @@
       if (!uid || !db) return;
       flushPendingPush(uid);
     },
+    retrySync,
   };
 
   function start() {

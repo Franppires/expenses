@@ -1,19 +1,7 @@
-const CACHE = "minhas-despesas-v1";
-const ASSETS = [
-  "./",
-  "./index.html",
-  "./css/app.css",
-  "./js/app.js",
-  "./js/cloud.js",
-  "./js/firebase-config.js",
-  "./js/pwa.js",
-  "./manifest.webmanifest",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-];
+const CACHE = "minhas-despesas-v2";
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
@@ -24,20 +12,38 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+function networkFirst(request) {
+  return fetch(request)
+    .then((res) => {
+      if (res && res.status === 200 && res.type === "basic") {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(request, copy));
+      }
+      return res;
+    })
+    .catch(() => caches.match(request));
+}
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
   if (e.request.method !== "GET") return;
+
+  const path = url.pathname;
+  const isCode =
+    path.endsWith(".js") ||
+    path.endsWith(".css") ||
+    path.endsWith(".html") ||
+    path.endsWith("/") ||
+    path.endsWith("/expenses") ||
+    path.endsWith("/expenses/");
+
+  if (isCode) {
+    e.respondWith(networkFirst(e.request));
+    return;
+  }
+
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const net = fetch(e.request).then((res) => {
-        if (res && res.status === 200 && res.type === "basic") {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      });
-      return cached || net;
-    })
+    caches.match(e.request).then((cached) => cached || networkFirst(e.request))
   );
 });

@@ -83,6 +83,7 @@ body {
 
 .sync-status.sync-ok { color: var(--income); }
 .sync-status.sync-warn { color: var(--warn); }
+.sync-retry { margin-top: 0.35rem; }
 
 .auth-screen {
   min-height: 100vh;

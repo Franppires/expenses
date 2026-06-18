@@ -65,6 +65,7 @@
         <h1>Minhas despesas</h1>
         <p id="headerSubtitle">Controle financeiro pessoal</p>
         <p id="syncStatus" class="sync-status" aria-live="polite"></p>
+        <button type="button" class="btn btn-ghost btn-sm sync-retry hidden" id="btnRetrySync">Sincronizar</button>
       </div>
       <div class="header-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="btnLogout" title="Sair">Sair</button>
@@ -186,6 +187,7 @@
         <p class="hint" id="userEmail">—</p>
         <p class="hint">Os dados são salvos na nuvem vinculados ao seu login. Ao entrar em outro aparelho, tudo aparece igual.</p>
         <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btnRetrySyncData">Sincronizar na nuvem</button>
           <button type="button" class="btn btn-ghost" id="btnLogoutData">Sair da conta</button>
         </div>
       </div>

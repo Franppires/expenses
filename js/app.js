@@ -1273,6 +1273,10 @@
 
   window.MinhasDespesasRecoverLocal = recoverAllOrphanMonths;
   window.MinhasDespesasSeedAccount = seedKnownAccount;
+  window.MinhasDespesasRefresh = function () {
+    applyMonth();
+    renderAll();
+  };
 
   window.MinhasDespesasSignOut = function () {
     currentUserId = null;
