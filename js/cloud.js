@@ -41,6 +41,21 @@
     if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
   }
 
+  async function signOutSafe() {
+    const user = auth?.currentUser;
+    if (user && db) {
+      setSyncStatus("Salvando…", true);
+      try {
+        await withTimeout(flushToCloud(user.uid), 12000);
+        setSyncStatus("Salvo na nuvem", true);
+      } catch (e) {
+        console.error(e);
+        setSyncStatus("Salvo neste aparelho", false);
+      }
+    }
+    if (auth) await auth.signOut();
+  }
+
   function openApp(user) {
     hideAuth();
     setAuthLoading(false);
@@ -186,6 +201,16 @@
     return s;
   }
 
+  function mergeMonthPreferLocal(localData, cloudData) {
+    if (!cloudData || monthScore(cloudData) === 0) return localData;
+    if (!localData || monthScore(localData) === 0) return cloudData;
+    const localTs = localData.savedAt || 0;
+    const cloudTs = cloudData.savedAt || 0;
+    if (localTs && cloudTs) return localTs >= cloudTs ? localData : cloudData;
+    if (monthScore(localData) >= monthScore(cloudData)) return localData;
+    return cloudData;
+  }
+
   async function pullFromCloud(uid) {
     const monthsSnap = await db.collection("users").doc(uid).collection("months").get();
     const prefix = "minhas-despesas-v2:" + uid + ":";
@@ -194,15 +219,21 @@
       const cloudData = stripCloudMeta(doc.data());
       const localRaw = localStorage.getItem(key);
       if (!localRaw) {
-        localStorage.setItem(key, JSON.stringify(cloudData));
+        if (monthScore(cloudData) > 0) {
+          localStorage.setItem(key, JSON.stringify(cloudData));
+        }
         return;
       }
       try {
         const localData = JSON.parse(localRaw);
-        if (monthScore(localData) >= monthScore(cloudData)) return;
-        localStorage.setItem(key, JSON.stringify(cloudData));
+        const merged = mergeMonthPreferLocal(localData, cloudData);
+        if (JSON.stringify(merged) !== JSON.stringify(localData)) {
+          localStorage.setItem(key, JSON.stringify(merged));
+        }
       } catch (_) {
-        localStorage.setItem(key, JSON.stringify(cloudData));
+        if (monthScore(cloudData) > 0) {
+          localStorage.setItem(key, JSON.stringify(cloudData));
+        }
       }
     });
 
@@ -257,13 +288,21 @@
     return count;
   }
 
+  async function flushToCloud(uid) {
+    clearTimeout(pushTimer);
+    for (const [ym, data] of pendingMonths.entries()) {
+      await pushMonthToCloud(uid, ym, data);
+    }
+    pendingMonths.clear();
+    await uploadLocalMonths(uid);
+  }
+
   async function runFullSync(user) {
     setSyncStatus("Baixando seus dados…", true);
     await withTimeout(pullFromCloud(user.uid), 15000);
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
-    if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
     setSyncStatus("Enviando para nuvem…", true);
-    await withTimeout(uploadLocalMonths(user.uid), 15000);
+    await withTimeout(flushToCloud(user.uid), 15000);
     setSyncStatus("Sincronizado", true);
     if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
   }
@@ -385,12 +424,8 @@
       signUp(email, password);
     });
 
-    $("#btnLogout")?.addEventListener("click", () => {
-      if (auth) auth.signOut();
-    });
-    $("#btnLogoutData")?.addEventListener("click", () => {
-      if (auth) auth.signOut();
-    });
+    $("#btnLogout")?.addEventListener("click", () => { signOutSafe(); });
+    $("#btnLogoutData")?.addEventListener("click", () => { signOutSafe(); });
     $("#btnRetrySync")?.addEventListener("click", () => retrySync());
     $("#btnRetrySyncData")?.addEventListener("click", () => retrySync());
   }

@@ -308,7 +308,7 @@
 
   const SEED_ACCOUNT_EMAIL = "franpp22@gmail.com";
 
-  /** Restaura maio/jun/2026 (e presets) na conta quando dados sumiram ou estão vazios. */
+  /** Só preenche meses vazios — nunca sobrescreve dados já salvos. */
   function seedKnownAccount(email, uid) {
     if ((email || "").trim().toLowerCase() !== SEED_ACCOUNT_EMAIL) return 0;
     const prevUid = currentUserId;
@@ -321,15 +321,13 @@
         const raw = localStorage.getItem(userKey);
         if (raw) existing = migrateLegacy(ym, JSON.parse(raw));
       } catch (_) { /* ignore */ }
+      const existingScore = existing ? monthDataScore(existing) : 0;
+      if (existingScore > 0) return;
       let preset = JSON.parse(JSON.stringify(PRESETS[ym]));
       preset.version = 2;
       preset = applyMonthPatch(ym, preset);
-      const presetScore = monthDataScore(preset);
-      const existingScore = existing ? monthDataScore(existing) : 0;
-      if (!existing || existingScore < presetScore) {
-        saveMonth(ym, preset, uid);
-        seeded++;
-      }
+      saveMonth(ym, preset, uid);
+      seeded++;
     });
     currentUserId = prevUid;
     return seeded;
@@ -357,7 +355,7 @@
   }
 
   function saveMonth(ym, data, explicitUid) {
-    const payload = { ...data, version: 2 };
+    const payload = { ...data, version: 2, savedAt: Date.now() };
     const uid = explicitUid !== undefined ? explicitUid : currentUserId;
     const scope = uid ? uid + ":" : "";
     localStorage.setItem(STORAGE_PREFIX_V2 + scope + ym, JSON.stringify(payload));
