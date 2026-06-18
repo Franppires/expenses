@@ -16,6 +16,44 @@
   const BILLS_FIXED = BILLS.filter((b) => b.kind === "fixed");
   const BILLS_VARIABLE = BILLS.filter((b) => b.kind === "variable");
 
+  function normalizeCustomBill(raw) {
+    return {
+      id: raw.id || uid(),
+      label: String(raw.label || "Nova conta").trim() || "Nova conta",
+      icon: raw.icon || "📄",
+      kind: raw.kind === "variable" ? "variable" : "fixed",
+    };
+  }
+
+  function getCustomBills(data) {
+    return (data?.customBills || []).map(normalizeCustomBill);
+  }
+
+  function getAllBills(data) {
+    return BILLS.concat(getCustomBills(data));
+  }
+
+  function getAllBillsFixed(data) {
+    return getAllBills(data).filter((b) => b.kind === "fixed");
+  }
+
+  function getAllBillsVariable(data) {
+    return getAllBills(data).filter((b) => b.kind === "variable");
+  }
+
+  function ensureMonthShape(data) {
+    if (!data.customBills) data.customBills = [];
+    if (!data.bills) data.bills = {};
+    BILLS.forEach((b) => {
+      if (!data.bills[b.id]) data.bills[b.id] = emptyBill();
+    });
+    data.customBills = data.customBills.map(normalizeCustomBill);
+    data.customBills.forEach((cb) => {
+      if (!data.bills[cb.id]) data.bills[cb.id] = emptyBill();
+    });
+    return data;
+  }
+
   const PATCHES_KEY_BASE = "minhas-despesas-patches-done";
 
   let currentUserId = null;
@@ -177,7 +215,7 @@
   function emptyMonth() {
     const bills = {};
     BILLS.forEach((b) => { bills[b.id] = emptyBill(); });
-    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [] };
+    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [], customBills: [] };
   }
 
   function migrateLegacy(ym, raw) {
@@ -379,6 +417,7 @@
   function ensureMonth(ym) {
     let data = loadMonth(ym);
     if (data) {
+      data = ensureMonthShape(data);
       if (!localStorage.getItem(storageKey(ym))) saveMonth(ym, data);
       const snap = JSON.stringify(data);
       data = applyMonthPatch(ym, data);
@@ -416,6 +455,13 @@
       if (b.kind === "variable") billsVariable += n.amount;
       else billsFixed += n.amount;
     });
+    getCustomBills(data).forEach((b) => {
+      const n = normalizeBill(data.bills?.[b.id]);
+      billsPlanned += n.amount;
+      billsPaid += paidAmount(n);
+      if (b.kind === "variable") billsVariable += n.amount;
+      else billsFixed += n.amount;
+    });
     let extrasPlanned = 0;
     let extrasPaid = 0;
     extras.forEach((e) => {
@@ -443,8 +489,10 @@
   }
 
   function readBillsFromDom() {
+    const ym = getMonth();
+    const data = ensureMonth(ym);
     const bills = {};
-    BILLS.forEach((b) => {
+    getAllBills(data).forEach((b) => {
       bills[b.id] = normalizeBill({
         amount: $(`#bill-${b.id}-amount`)?.value,
         due: $(`#bill-${b.id}-due`)?.value || "",
@@ -456,12 +504,49 @@
     return bills;
   }
 
+  function readCustomBillsFromDom(data) {
+    return getCustomBills(data).map((cb) =>
+      normalizeCustomBill({
+        id: cb.id,
+        label: $(`#bill-${cb.id}-label`)?.value ?? cb.label,
+        kind: $(`#bill-${cb.id}-kind`)?.value ?? cb.kind,
+        icon: cb.icon,
+      })
+    );
+  }
+
   function persistFromDom() {
     const ym = getMonth();
     const data = ensureMonth(ym);
     data.bills = readBillsFromDom();
+    if (getCustomBills(data).length) {
+      data.customBills = readCustomBillsFromDom(data);
+    }
     saveMonth(ym, data);
     renderAll();
+  }
+
+  function addCustomBill() {
+    const ym = getMonth();
+    const data = ensureMonth(ym);
+    const id = "c_" + uid();
+    data.customBills.push(normalizeCustomBill({ id, label: "Nova conta", kind: "fixed" }));
+    data.bills[id] = emptyBill();
+    saveMonth(ym, data);
+    renderBills();
+    renderHome();
+    renderStatement();
+    toast("Conta adicionada");
+  }
+
+  function removeCustomBill(id) {
+    const ym = getMonth();
+    const data = ensureMonth(ym);
+    data.customBills = getCustomBills(data).filter((b) => b.id !== id);
+    delete data.bills[id];
+    saveMonth(ym, data);
+    renderAll();
+    toast("Conta removida");
   }
 
   function statusBadge(status) {
@@ -477,16 +562,26 @@
     return "💰";
   }
 
-  function billBlockHtml(b, n) {
+  function billBlockHtml(b, n, isCustom) {
     const overdue = isOverdue(n);
     const kindHint = b.kind === "variable"
       ? '<span class="badge badge-partial">Variável</span>'
       : '<span class="badge badge-paid">Fixa</span>';
+    const titleHtml = isCustom
+      ? `<div class="expense-title" style="flex:1">
+          <input type="text" id="bill-${b.id}-label" class="bill-label-input" value="${escapeAttr(b.label)}" placeholder="Nome da conta" />
+          <select id="bill-${b.id}-kind" style="margin-top:0.35rem;width:100%">
+            <option value="fixed"${b.kind === "fixed" ? " selected" : ""}>Fixa (todo mês)</option>
+            <option value="variable"${b.kind === "variable" ? " selected" : ""}>Variável</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-danger btn-sm btn-del-bill" data-id="${b.id}" title="Remover conta">✕</button>`
+      : `<div class="expense-title">${b.label} ${kindHint}</div>`;
     return `
       <div class="expense-block${overdue ? " overdue" : ""}" data-bill="${b.id}">
         <div class="expense-head">
           <span class="expense-icon">${b.icon}</span>
-          <div class="expense-title">${b.label} ${kindHint}</div>
+          ${titleHtml}
         </div>
         <div class="expense-grid">
           <div class="span2">
@@ -531,15 +626,20 @@
     const host = $("#billsList");
     if (!host) return;
 
-    const renderGroup = (list, title) => {
+    const renderGroup = (list, title, isCustom) => {
       if (!list.length) return "";
-      const blocks = list.map((b) => billBlockHtml(b, normalizeBill(data.bills[b.id]))).join("");
+      const blocks = list.map((b) => billBlockHtml(b, normalizeBill(data.bills[b.id]), isCustom)).join("");
       return `<p class="bills-group-title">${title}</p>${blocks}`;
     };
+
+    const customFixed = getCustomBills(data).filter((b) => b.kind === "fixed");
+    const customVariable = getCustomBills(data).filter((b) => b.kind === "variable");
 
     host.innerHTML =
       renderGroup(BILLS_FIXED, "Fixas — mesmo valor todo mês") +
       renderGroup(BILLS_VARIABLE, "Variáveis — mudam (luz, fatura do cartão)") +
+      (customFixed.length ? renderGroup(customFixed, "Suas contas fixas", true) : "") +
+      (customVariable.length ? renderGroup(customVariable, "Suas contas variáveis", true) : "") +
       '<p class="hint" style="margin-top:0.65rem">Gastos pontuais (Nala, faxineira, cozinheira…) ficam na aba <strong>Gastos</strong>.</p>';
 
     host.querySelectorAll("input, select").forEach((el) => {
@@ -758,6 +858,19 @@
         icon: b.icon,
       });
     });
+    getCustomBills(data).forEach((b) => {
+      const n = normalizeBill(data.bills?.[b.id]);
+      if (n.amount <= 0) return;
+      lines.push({
+        kind: "out",
+        group: b.kind === "fixed" ? "Suas contas fixas" : "Suas contas variáveis",
+        date: n.due || n.paidDate,
+        label: b.label,
+        amount: n.amount,
+        status: statusLabel(n.status),
+        icon: b.icon,
+      });
+    });
     (data.extras || []).map(normalizeExtra).forEach((e) => {
       if (e.amount <= 0) return;
       lines.push({
@@ -873,6 +986,12 @@
           rows.push({ label: b.label, icon: b.icon, amount: n.amount, due: n.due, type: "bill" });
         }
       });
+      getCustomBills(data).forEach((b) => {
+        const n = normalizeBill(data.bills[b.id]);
+        if (n.amount > 0 && n.status !== "paid") {
+          rows.push({ label: b.label, icon: b.icon, amount: n.amount, due: n.due, type: "bill" });
+        }
+      });
       data.extras.forEach((ex) => {
         const e = normalizeExtra(ex);
         if (e.amount > 0 && e.status !== "paid") {
@@ -908,8 +1027,9 @@
     return localStorage.getItem(storageKey(ym)) ? ensureMonth(ym) : baseData;
   }
 
-  function buildProjExpandHtml(m) {
+  function buildProjExpandHtml(m, baseData) {
     const billFields = (list, title) => {
+      if (!list.length) return "";
       let html = `<p class="hint" style="margin:0.5rem 0 0.25rem;font-weight:700;color:var(--text)">${title}</p>`;
       list.forEach((b) => {
         html += `<div class="proj-line-field">
@@ -920,6 +1040,9 @@
       });
       return html;
     };
+
+    const customFixed = getCustomBills(baseData).filter((b) => b.kind === "fixed");
+    const customVariable = getCustomBills(baseData).filter((b) => b.kind === "variable");
 
     return `<tr class="proj-expand-row" data-proj-expand="${m}" hidden>
       <td colspan="6">
@@ -940,6 +1063,8 @@
             </div>
             ${billFields(BILLS_FIXED, "Contas fixas")}
             ${billFields(BILLS_VARIABLE, "Contas variáveis")}
+            ${billFields(customFixed, "Suas contas fixas")}
+            ${billFields(customVariable, "Suas contas variáveis")}
             <div class="proj-line-field">
               <label class="field-label">🛒 Outros gastos (total)</label>
               <div class="amount-row"><span class="prefix">R$</span>
@@ -978,7 +1103,7 @@
     root.querySelector('[data-proj="salary"]').value = parts.salary > 0 ? parts.salary : "";
     root.querySelector('[data-proj="bonus"]').value = parts.bonus > 0 ? parts.bonus : "";
     root.querySelector('[data-proj="extras"]').value = parts.extrasTotal > 0 ? parts.extrasTotal : "";
-    BILLS.forEach((b) => {
+    getAllBills(data).forEach((b) => {
       const n = normalizeBill(data.bills[b.id]);
       const inp = root.querySelector(`[data-proj="bill"][data-id="${b.id}"]`);
       if (inp) inp.value = n.amount > 0 ? n.amount : "";
@@ -999,7 +1124,7 @@
     if (incomes.length === 0) incomes.push(emptyIncome("Salário", "salary"));
 
     const bills = {};
-    BILLS.forEach((b) => {
+    getAllBills(prev).forEach((b) => {
       const amt = parseMoney(root.querySelector(`[data-proj="bill"][data-id="${b.id}"]`)?.value);
       const old = normalizeBill(prev.bills?.[b.id]);
       bills[b.id] = { ...old, amount: amt };
@@ -1009,7 +1134,7 @@
       ? [normalizeExtra({ id: "proj-extras", label: "Gastos variáveis (projeção)", amount: extrasAmt, status: "pending" })]
       : [];
 
-    saveMonth(m, { version: 2, incomes, bills, extras });
+    saveMonth(m, { version: 2, incomes, bills, extras, customBills: prev.customBills || [] });
     projOpenMonth = null;
     const row = document.querySelector(`[data-proj-expand="${m}"]`);
     if (row) row.setAttribute("hidden", "");
@@ -1039,7 +1164,7 @@
         <td class="mono ${balC}">R$ ${formatMoney(s.balance)}</td>
         <td><button type="button" class="btn btn-ghost btn-sm btn-proj-edit" data-month="${m}">Editar</button></td>
       </tr>`;
-      html += buildProjExpandHtml(m);
+      html += buildProjExpandHtml(m, base);
     }
     body.innerHTML = html;
     if (projOpenMonth) {
@@ -1087,9 +1212,14 @@
         const tipo = n.type === "partner" ? "Renda (marido)" : n.type === "salary" ? "Salário" : n.type === "bonus" ? "Abono" : "Renda";
         rows.push([ym, tipo, n.label, n.amount, n.date, n.received ? "Recebido" : "Previsto"]);
       });
-      BILLS.forEach((b) => {
+      getAllBills(ensureMonthShape(data)).forEach((b) => {
         const n = normalizeBill(data.bills?.[b.id]);
-        if (n.amount > 0) rows.push([ym, b.kind === "fixed" ? "Conta fixa" : "Conta variável", b.label, n.amount, n.due, n.status]);
+        if (n.amount <= 0) return;
+        const isCustom = !BILLS.some((x) => x.id === b.id);
+        const tipo = b.kind === "fixed"
+          ? (isCustom ? "Conta fixa (sua)" : "Conta fixa")
+          : (isCustom ? "Conta variável (sua)" : "Conta variável");
+        rows.push([ym, tipo, b.label, n.amount, n.due, n.status]);
       });
       (data.extras || []).forEach((e) => {
         const n = normalizeExtra(e);
@@ -1200,6 +1330,13 @@
       saveMonth(getMonth(), data);
       renderExtras();
       renderHome();
+    });
+
+    $("#btnAddBill")?.addEventListener("click", addCustomBill);
+
+    document.getElementById("view-bills")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".btn-del-bill");
+      if (btn?.dataset.id) removeCustomBill(btn.dataset.id);
     });
 
     $("#btnExportJson")?.addEventListener("click", exportJson);
