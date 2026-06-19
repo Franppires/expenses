@@ -220,6 +220,19 @@
       <div class="card">
         <div class="card-head"><h2>Resumo técnico</h2></div>
         <p class="hint" id="dataStats">—</p>
+        <details class="sync-help">
+          <summary>Sync não funciona?</summary>
+          <p>No <a href="https://console.firebase.google.com/project/expenses-144a4/firestore/rules" target="_blank" rel="noopener">Firebase → Firestore → Regras</a>, publique:</p>
+          <pre class="sync-rules">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null &amp;&amp; request.auth.uid == userId;
+    }
+  }
+}</pre>
+          <p class="hint">Em Authentication → Domínios autorizados, adicione <strong>franppires.github.io</strong></p>
+        </details>
       </div>
     </section>
   </div>

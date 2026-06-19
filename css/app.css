@@ -981,6 +981,29 @@ select:focus-visible,
 
 .pwa-install .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
+.sync-help {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.sync-help summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--brand);
+  margin-bottom: 0.5rem;
+}
+.sync-rules {
+  font-size: 0.65rem;
+  line-height: 1.4;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 0.65rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ——— Responsivo ——— */
 @media (max-width: 400px) {
   .expense-grid,

@@ -122,9 +122,23 @@
     }
     auth = firebase.auth();
     db = firebase.firestore();
-    db.settings({ ignoreUndefinedProperties: true });
+    db.settings({
+      ignoreUndefinedProperties: true,
+      experimentalAutoDetectLongPolling: true,
+    });
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
     return true;
+  }
+
+  async function ensureAuthReady() {
+    const user = auth?.currentUser;
+    if (!user) {
+      const err = new Error("Não autenticado");
+      err.code = "unauthenticated";
+      throw err;
+    }
+    await user.getIdToken(true);
+    return user;
   }
 
   function stripCloudMeta(data) {
@@ -135,21 +149,34 @@
   }
 
   function sanitizeForFirestore(data) {
-    return JSON.parse(JSON.stringify(data, (_, v) => (v === undefined ? null : v)));
+    return JSON.parse(JSON.stringify(data, (key, v) => {
+      if (v === undefined) return null;
+      if (typeof v === "number" && !Number.isFinite(v)) return 0;
+      return v;
+    }));
   }
 
   function syncErrorMessage(err) {
     const code = err?.code || "";
-    if (code === "permission-denied") {
-      return "Sem permissão no Firestore — confira as Regras no Firebase";
+    const msg = err?.message || "";
+    if (code === "permission-denied" || msg.includes("insufficient permissions")) {
+      return "Sem permissão — publique as Regras do Firestore (veja aba Dados)";
+    }
+    if (code === "unauthenticated") {
+      return "Sessão expirada — saia e entre de novo";
     }
     if (code === "unavailable" || code === "network-request-failed") {
       return "Sem internet — tente de novo";
     }
     if (code === "deadline-exceeded") {
-      return "Nuvem demorou — toque em Sincronizar";
+      return "Nuvem demorou — tente Sincronizar de novo";
     }
-    return "Erro na nuvem — toque em Sincronizar";
+    if (code === "invalid-argument") {
+      return "Dado inválido — tente Exportar JSON e reimportar";
+    }
+    if (code) return `Erro: ${code}`;
+    if (msg) return msg.slice(0, 80);
+    return "Erro na nuvem";
   }
 
   function migrateLegacyLocalToUser(uid) {
@@ -209,6 +236,7 @@
   }
 
   async function pullFromCloud(uid) {
+    await ensureAuthReady();
     const monthsSnap = await db.collection("users").doc(uid).collection("months").get();
     const prefix = "minhas-despesas-v2:" + uid + ":";
     let updated = 0;
@@ -248,47 +276,63 @@
   }
 
   async function pushMonthToCloud(uid, ym, data) {
-    const payload = {
-      ...sanitizeForFirestore(data),
+    await ensureAuthReady();
+    const clean = sanitizeForFirestore(data);
+    delete clean.updatedAt;
+    await db.collection("users").doc(uid).collection("months").doc(ym).set({
+      ...clean,
       version: 2,
-      savedAt: data.savedAt || Date.now(),
+      savedAt: Number(clean.savedAt) || Date.now(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    };
-    await db.collection("users").doc(uid).collection("months").doc(ym).set(payload);
+    });
   }
 
   async function pushPatchesToCloud(uid) {
-    const key = "minhas-despesas-patches-done:" + uid;
-    let patches = [];
     try {
-      patches = JSON.parse(localStorage.getItem(key) || "[]");
-    } catch (_) { /* ignore */ }
-    await db.collection("users").doc(uid).collection("meta").doc("settings").set(
-      { patches, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
+      await ensureAuthReady();
+      const key = "minhas-despesas-patches-done:" + uid;
+      let patches = [];
+      try {
+        patches = JSON.parse(localStorage.getItem(key) || "[]");
+      } catch (_) { /* ignore */ }
+      await db.collection("users").doc(uid).collection("meta").doc("settings").set(
+        { patches, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    } catch (e) {
+      console.warn("patches sync", e);
+    }
   }
 
   async function uploadLocalMonths(uid) {
     const prefix = "minhas-despesas-v2:" + uid + ":";
     let count = 0;
-    for (const key of Object.keys(localStorage)) {
-      if (!key.startsWith(prefix)) continue;
+    let lastError = null;
+    const months = Object.keys(localStorage).filter((key) => {
+      if (!key.startsWith(prefix)) return false;
+      return /^\d{4}-\d{2}$/.test(key.slice(prefix.length));
+    });
+
+    for (const key of months) {
       const ym = key.slice(prefix.length);
-      if (!/^\d{4}-\d{2}$/.test(ym)) continue;
-      const data = JSON.parse(localStorage.getItem(key));
-      await pushMonthToCloud(uid, ym, data);
-      count++;
+      try {
+        const data = JSON.parse(localStorage.getItem(key));
+        await pushMonthToCloud(uid, ym, data);
+        count++;
+      } catch (e) {
+        console.error("upload", ym, e);
+        lastError = e;
+      }
     }
+
     await pushPatchesToCloud(uid);
+
+    if (count === 0 && months.length > 0 && lastError) throw lastError;
     return count;
   }
 
   async function flushToCloud(uid) {
     clearTimeout(pushTimer);
-    for (const [ym, data] of pendingMonths.entries()) {
-      await pushMonthToCloud(uid, ym, data);
-    }
     pendingMonths.clear();
     return uploadLocalMonths(uid);
   }

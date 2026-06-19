@@ -1,4 +1,4 @@
-const CACHE = "minhas-despesas-v4";
+const CACHE = "minhas-despesas-v5";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then(() => self.skipWaiting()));
