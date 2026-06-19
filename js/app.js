@@ -308,7 +308,7 @@
 
   const SEED_ACCOUNT_EMAIL = "franpp22@gmail.com";
 
-  /** Só preenche meses vazios — nunca sobrescreve dados já salvos. */
+  /** Só preenche mês que nunca foi salvo neste aparelho. */
   function seedKnownAccount(email, uid) {
     if ((email || "").trim().toLowerCase() !== SEED_ACCOUNT_EMAIL) return 0;
     const prevUid = currentUserId;
@@ -316,13 +316,7 @@
     let seeded = 0;
     Object.keys(PRESETS).forEach((ym) => {
       const userKey = STORAGE_PREFIX_V2 + uid + ":" + ym;
-      let existing = null;
-      try {
-        const raw = localStorage.getItem(userKey);
-        if (raw) existing = migrateLegacy(ym, JSON.parse(raw));
-      } catch (_) { /* ignore */ }
-      const existingScore = existing ? monthDataScore(existing) : 0;
-      if (existingScore > 0) return;
+      if (localStorage.getItem(userKey)) return;
       let preset = JSON.parse(JSON.stringify(PRESETS[ym]));
       preset.version = 2;
       preset = applyMonthPatch(ym, preset);
@@ -1179,11 +1173,11 @@
   }
 
   function renderDataStats() {
-    const keys = Object.keys(localStorage).filter((k) => k.startsWith(userStoragePrefix()));
     const el = $("#dataStats");
     const sync = $("#syncStatus")?.textContent || "";
     if (el) {
-      el.textContent = `${keys.length} mês(es) na sua conta. ${currentUserId ? "Sincronização na nuvem ativa." : ""} ${sync}`;
+      const local = window.MinhasDespesasDataStats ? window.MinhasDespesasDataStats() : "";
+      el.textContent = `${local}. ${sync}`;
     }
   }
 
@@ -1394,16 +1388,10 @@
   window.MinhasDespesasInit = function (uid, email) {
     currentUserId = uid;
     wireApp();
-    const recovered = recoverAllOrphanMonths();
-    if (email && window.MinhasDespesasSeedAccount) {
-      window.MinhasDespesasSeedAccount(email, uid);
-    }
+    recoverAllOrphanMonths();
     refMonth.value = currentYM();
     applyMonth();
     renderAll();
-    if (recovered > 0) {
-      toast(`Recuperados ${recovered} mês(es) salvos neste aparelho`);
-    }
   };
 
   window.MinhasDespesasRecoverLocal = recoverAllOrphanMonths;
@@ -1411,6 +1399,13 @@
   window.MinhasDespesasRefresh = function () {
     applyMonth();
     renderAll();
+  };
+
+  window.MinhasDespesasToast = toast;
+
+  window.MinhasDespesasDataStats = function () {
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith(userStoragePrefix()));
+    return `${keys.length} mês(es) salvos neste aparelho`;
   };
 
   window.MinhasDespesasSignOut = function () {

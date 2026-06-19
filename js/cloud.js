@@ -21,6 +21,8 @@
   let pushTimer = null;
   let pendingMonths = new Map();
   let backgroundSyncPromise = null;
+  let lastSignedInUid = null;
+  let lastSyncError = "";
 
   function withTimeout(promise, ms) {
     return Promise.race([
@@ -39,21 +41,6 @@
     migrateLegacyLocalToUser(user.uid);
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
     if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
-  }
-
-  async function signOutSafe() {
-    const user = auth?.currentUser;
-    if (user && db) {
-      setSyncStatus("Salvando…", true);
-      try {
-        await withTimeout(flushToCloud(user.uid), 12000);
-        setSyncStatus("Salvo na nuvem", true);
-      } catch (e) {
-        console.error(e);
-        setSyncStatus("Salvo neste aparelho", false);
-      }
-    }
-    if (auth) await auth.signOut();
   }
 
   function openApp(user) {
@@ -93,6 +80,12 @@
     $("#authForm")?.classList.toggle("hidden", on);
   }
 
+  function updateDataStats() {
+    const el = $("#dataStats");
+    if (!el || !window.MinhasDespesasDataStats) return;
+    el.textContent = window.MinhasDespesasDataStats() + (lastSyncError ? " · " + lastSyncError : "");
+  }
+
   function setSyncStatus(text, ok) {
     const el = $("#syncStatus");
     if (!el) return;
@@ -101,6 +94,14 @@
     el.classList.toggle("sync-warn", !ok);
     const showRetry = !ok && text && auth?.currentUser;
     $("#btnRetrySync")?.classList.toggle("hidden", !showRetry);
+    if (ok) lastSyncError = "";
+    updateDataStats();
+  }
+
+  function reportSyncError(e) {
+    lastSyncError = syncErrorMessage(e);
+    setSyncStatus(lastSyncError, false);
+    if (window.MinhasDespesasToast) window.MinhasDespesasToast(lastSyncError);
   }
 
   function firebaseReady() {
@@ -128,12 +129,7 @@
 
   function stripCloudMeta(data) {
     if (!data || typeof data !== "object") return data;
-    const out = JSON.parse(JSON.stringify(data, (_, v) => {
-      if (v && typeof v === "object" && typeof v.seconds === "number" && typeof v.nanoseconds === "number") {
-        return null;
-      }
-      return v;
-    }));
+    const out = { ...data };
     delete out.updatedAt;
     return out;
   }
@@ -145,24 +141,20 @@
   function syncErrorMessage(err) {
     const code = err?.code || "";
     if (code === "permission-denied") {
-      return "Sem permissão no Firestore — publique as regras no Firebase Console";
+      return "Sem permissão no Firestore — confira as Regras no Firebase";
     }
     if (code === "unavailable" || code === "network-request-failed") {
-      return "Sem internet — tente de novo quando estiver online";
-    }
-    if (code === "failed-precondition") {
-      return "Firestore indisponível — toque em Sincronizar";
+      return "Sem internet — tente de novo";
     }
     if (code === "deadline-exceeded") {
-      return "Nuvem demorou — dados locais ok, toque em Sincronizar";
+      return "Nuvem demorou — toque em Sincronizar";
     }
-    return "Nuvem indisponível — toque em Sincronizar";
+    return "Erro na nuvem — toque em Sincronizar";
   }
 
   function migrateLegacyLocalToUser(uid) {
     const prefix = "minhas-despesas-v2:" + uid + ":";
     const patchesKey = "minhas-despesas-patches-done:" + uid;
-    let migrated = 0;
 
     Object.keys(localStorage).forEach((key) => {
       if (key.startsWith("minhas-despesas-v2:") && !key.includes(":" + uid + ":")) {
@@ -171,7 +163,6 @@
           const dest = prefix + rest;
           if (!localStorage.getItem(dest)) {
             localStorage.setItem(dest, localStorage.getItem(key));
-            migrated++;
           }
         }
       }
@@ -184,12 +175,10 @@
           const dest = prefix + ym;
           if (!localStorage.getItem(dest)) {
             localStorage.setItem(dest, localStorage.getItem(key));
-            migrated++;
           }
         }
       }
     });
-    return migrated;
   }
 
   function monthScore(data) {
@@ -198,58 +187,74 @@
     (data.incomes || []).forEach((i) => { s += Number(i.amount) || 0; });
     (data.extras || []).forEach((e) => { s += Number(e.amount) || 0; });
     Object.values(data.bills || {}).forEach((b) => { s += Number(b.amount) || 0; });
+    if ((data.customBills || []).length) s += 1;
+    if ((data.extras || []).length) s += 1;
     return s;
   }
 
-  function mergeMonthPreferLocal(localData, cloudData) {
-    if (!cloudData || monthScore(cloudData) === 0) return localData;
-    if (!localData || monthScore(localData) === 0) return cloudData;
-    const localTs = localData.savedAt || 0;
-    const cloudTs = cloudData.savedAt || 0;
+  /** Nunca apaga edição local sem prova de que a nuvem é mais nova. */
+  function mergeMonths(localData, cloudData) {
+    if (!cloudData) return localData;
+    if (!localData) return monthScore(cloudData) > 0 ? cloudData : localData;
+
+    const localTs = Number(localData.savedAt) || 0;
+    const cloudTs = Number(cloudData.savedAt) || 0;
+
     if (localTs && cloudTs) return localTs >= cloudTs ? localData : cloudData;
-    if (monthScore(localData) >= monthScore(cloudData)) return localData;
-    return cloudData;
+    if (localTs && !cloudTs) return localData;
+    if (!localTs && cloudTs) return cloudData;
+    if (monthScore(cloudData) === 0) return localData;
+    if (monthScore(localData) === 0) return cloudData;
+    return localData;
   }
 
   async function pullFromCloud(uid) {
     const monthsSnap = await db.collection("users").doc(uid).collection("months").get();
     const prefix = "minhas-despesas-v2:" + uid + ":";
+    let updated = 0;
+
     monthsSnap.forEach((doc) => {
       const key = prefix + doc.id;
       const cloudData = stripCloudMeta(doc.data());
       const localRaw = localStorage.getItem(key);
+
       if (!localRaw) {
         if (monthScore(cloudData) > 0) {
           localStorage.setItem(key, JSON.stringify(cloudData));
+          updated++;
         }
         return;
       }
+
       try {
         const localData = JSON.parse(localRaw);
-        const merged = mergeMonthPreferLocal(localData, cloudData);
-        if (JSON.stringify(merged) !== JSON.stringify(localData)) {
-          localStorage.setItem(key, JSON.stringify(merged));
+        const merged = mergeMonths(localData, cloudData);
+        const mergedJson = JSON.stringify(merged);
+        if (mergedJson !== localRaw) {
+          localStorage.setItem(key, mergedJson);
+          updated++;
         }
-      } catch (_) {
-        if (monthScore(cloudData) > 0) {
-          localStorage.setItem(key, JSON.stringify(cloudData));
-        }
-      }
+      } catch (_) { /* keep local */ }
     });
 
-    const meta = await db.collection("users").doc(uid).collection("meta").doc("settings").get();
-    if (meta.exists && meta.data().patches) {
-      localStorage.setItem("minhas-despesas-patches-done:" + uid, JSON.stringify(meta.data().patches));
-    }
-    return monthsSnap.size;
+    try {
+      const meta = await db.collection("users").doc(uid).collection("meta").doc("settings").get();
+      if (meta.exists && meta.data().patches) {
+        localStorage.setItem("minhas-despesas-patches-done:" + uid, JSON.stringify(meta.data().patches));
+      }
+    } catch (_) { /* ignore */ }
+
+    return { cloudCount: monthsSnap.size, updated };
   }
 
   async function pushMonthToCloud(uid, ym, data) {
-    await db.collection("users").doc(uid).collection("months").doc(ym).set({
+    const payload = {
       ...sanitizeForFirestore(data),
       version: 2,
+      savedAt: data.savedAt || Date.now(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    };
+    await db.collection("users").doc(uid).collection("months").doc(ym).set(payload);
   }
 
   async function pushPatchesToCloud(uid) {
@@ -271,18 +276,9 @@
       if (!key.startsWith(prefix)) continue;
       const ym = key.slice(prefix.length);
       if (!/^\d{4}-\d{2}$/.test(ym)) continue;
-      try {
-        const data = sanitizeForFirestore(JSON.parse(localStorage.getItem(key)));
-        await db.collection("users").doc(uid).collection("months").doc(ym).set({
-          ...data,
-          version: 2,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        });
-        count++;
-      } catch (e) {
-        console.error("upload month", ym, e);
-        throw e;
-      }
+      const data = JSON.parse(localStorage.getItem(key));
+      await pushMonthToCloud(uid, ym, data);
+      count++;
     }
     await pushPatchesToCloud(uid);
     return count;
@@ -294,25 +290,35 @@
       await pushMonthToCloud(uid, ym, data);
     }
     pendingMonths.clear();
-    await uploadLocalMonths(uid);
+    return uploadLocalMonths(uid);
   }
 
   async function runFullSync(user) {
-    setSyncStatus("Baixando seus dados…", true);
-    await withTimeout(pullFromCloud(user.uid), 15000);
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
+
     setSyncStatus("Enviando para nuvem…", true);
-    await withTimeout(flushToCloud(user.uid), 15000);
-    setSyncStatus("Sincronizado", true);
+    const uploaded = await withTimeout(flushToCloud(user.uid), 25000);
+
+    setSyncStatus("Baixando outros aparelhos…", true);
+    const pulled = await withTimeout(pullFromCloud(user.uid), 25000);
+
+    if (pulled.updated > 0) {
+      setSyncStatus("Atualizando…", true);
+      await withTimeout(uploadLocalMonths(user.uid), 25000);
+    }
+
+    setSyncStatus(`Sincronizado · ${uploaded} mês(es)`, true);
     if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
+    return { uploaded, pulled };
   }
 
   function startBackgroundSync(user) {
     if (backgroundSyncPromise) return backgroundSyncPromise;
     backgroundSyncPromise = runFullSync(user)
       .catch((e) => {
-        console.error(e);
-        setSyncStatus(syncErrorMessage(e), false);
+        console.error("sync", e);
+        reportSyncError(e);
+        throw e;
       })
       .finally(() => {
         backgroundSyncPromise = null;
@@ -322,37 +328,61 @@
 
   async function retrySync() {
     const user = auth?.currentUser;
-    if (!user || !db) return false;
+    if (!user || !db) {
+      setSyncStatus("Entre na conta primeiro", false);
+      return false;
+    }
     if (backgroundSyncPromise) {
-      try { await backgroundSyncPromise; } catch (_) { /* ignore */ }
+      try { await backgroundSyncPromise; } catch (_) { /* continue */ }
     }
     try {
-      await withTimeout(runFullSync(user), 30000);
+      await withTimeout(runFullSync(user), 45000);
+      if (window.MinhasDespesasToast) window.MinhasDespesasToast("Sincronizado com sucesso");
       return true;
     } catch (e) {
       console.error(e);
-      setSyncStatus(syncErrorMessage(e), false);
+      reportSyncError(e);
       return false;
     }
   }
 
-  function flushPendingPush(uid) {
+  function scheduleCloudPush(uid) {
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(async () => {
-      if (!uid || !db) return;
-      setSyncStatus("Salvando na nuvem…", true);
+    pushTimer = setTimeout(() => {
+      flushToCloud(uid)
+        .then((n) => setSyncStatus(`Salvo na nuvem · ${n} mês(es)`, true))
+        .catch((e) => reportSyncError(e));
+    }, 800);
+  }
+
+  function queueMonthSave(ym, data) {
+    const uid = auth?.currentUser?.uid;
+    if (!uid || !db) return;
+    const payload = { ...data, savedAt: data.savedAt || Date.now() };
+    pendingMonths.set(ym, payload);
+    setSyncStatus("Salvando…", true);
+    pushMonthToCloud(uid, ym, payload)
+      .then(() => setSyncStatus("Salvo na nuvem", true))
+      .catch((e) => {
+        reportSyncError(e);
+        scheduleCloudPush(uid);
+      });
+  }
+
+  async function signOutSafe() {
+    const user = auth?.currentUser;
+    if (user && db) {
+      setSyncStatus("Salvando antes de sair…", true);
       try {
-        for (const [ym, data] of pendingMonths.entries()) {
-          await pushMonthToCloud(uid, ym, data);
-        }
-        pendingMonths.clear();
-        await pushPatchesToCloud(uid);
+        await withTimeout(flushToCloud(user.uid), 15000);
         setSyncStatus("Salvo na nuvem", true);
       } catch (e) {
         console.error(e);
-        setSyncStatus("Erro ao salvar na nuvem", false);
+        reportSyncError(e);
       }
-    }, 600);
+    }
+    lastSignedInUid = null;
+    if (auth) await auth.signOut();
   }
 
   async function onUserSignedIn(user) {
@@ -360,11 +390,18 @@
     setAuthLoading(true);
     prepareLocalData(user);
     openApp(user);
-    startBackgroundSync(user);
+
+    if (lastSignedInUid !== user.uid) {
+      lastSignedInUid = user.uid;
+      startBackgroundSync(user);
+    } else {
+      setSyncStatus("Dados neste aparelho", true);
+    }
   }
 
   function onUserSignedOut() {
     pendingMonths.clear();
+    lastSignedInUid = null;
     if (window.MinhasDespesasSignOut) window.MinhasDespesasSignOut();
     showAuth();
     setSyncStatus("", false);
@@ -428,6 +465,13 @@
     $("#btnLogoutData")?.addEventListener("click", () => { signOutSafe(); });
     $("#btnRetrySync")?.addEventListener("click", () => retrySync());
     $("#btnRetrySyncData")?.addEventListener("click", () => retrySync());
+
+    document.addEventListener("visibilitychange", () => {
+      const uid = auth?.currentUser?.uid;
+      if (document.visibilityState === "hidden" && uid && db && pendingMonths.size) {
+        flushToCloud(uid).catch(() => {});
+      }
+    });
   }
 
   function showSetupInstructions() {
@@ -441,15 +485,14 @@
       return auth?.currentUser?.uid || null;
     },
     queueMonthSave(ym, data) {
-      const uid = auth?.currentUser?.uid;
-      if (!uid || !db) return;
-      pendingMonths.set(ym, data);
-      flushPendingPush(uid);
+      queueMonthSave(ym, data);
     },
     queuePatchesSave() {
       const uid = auth?.currentUser?.uid;
       if (!uid || !db) return;
-      flushPendingPush(uid);
+      pushPatchesToCloud(uid)
+        .then(() => setSyncStatus("Salvo na nuvem", true))
+        .catch((e) => reportSyncError(e));
     },
     retrySync,
   };
