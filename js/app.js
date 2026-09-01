@@ -406,6 +406,55 @@
     return data;
   }
 
+  /** Dia do mês antigo, ajustado para caber no novo mês (ex.: 31 → 28/29/30). */
+  function shiftDateToMonth(dateStr, ym) {
+    if (!dateStr) return "";
+    const day = Number(dateStr.slice(8, 10)) || 1;
+    const [y, m] = ym.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return `${ym}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+  }
+
+  /** Mês salvo mais próximo antes de `ym`, para repetir o que é fixo/recorrente. */
+  function findPreviousMonthData(ym) {
+    let cursor = ym;
+    for (let i = 0; i < 24; i++) {
+      cursor = addMonths(cursor, -1);
+      const raw = localStorage.getItem(storageKey(cursor));
+      if (!raw) continue;
+      try {
+        return migrateLegacy(cursor, JSON.parse(raw));
+      } catch (_) { /* ignore */ }
+    }
+    return null;
+  }
+
+  /** Contas fixas e rendas recorrentes (salário, marido) repetem; variáveis e extras começam zerados. */
+  function buildCarryForwardMonth(ym, prevRaw) {
+    const prev = ensureMonthShape(migrateLegacy("", prevRaw));
+    const data = emptyMonth();
+    data.customBills = getCustomBills(prev);
+    getAllBills(prev).forEach((b) => {
+      if (!data.bills[b.id]) data.bills[b.id] = emptyBill();
+      const prevBill = normalizeBill(prev.bills[b.id]);
+      if (b.kind === "fixed" && prevBill.amount > 0) {
+        data.bills[b.id] = {
+          amount: prevBill.amount,
+          due: shiftDateToMonth(prevBill.due, ym),
+          status: "pending",
+          paidDate: "",
+          paidPart: 0,
+        };
+      }
+    });
+    const incomes = (prev.incomes || [])
+      .map(normalizeIncome)
+      .filter((i) => i.type === "salary" || i.type === "partner")
+      .map((i) => normalizeIncome({ ...i, date: shiftDateToMonth(i.date, ym), received: false }));
+    if (incomes.length) data.incomes = incomes;
+    return data;
+  }
+
   function ensureMonth(ym) {
     let data = loadMonth(ym);
     if (data) {
@@ -420,6 +469,13 @@
       data = JSON.parse(JSON.stringify(PRESETS[ym]));
       data.version = 2;
       saveMonth(ym, data);
+      return data;
+    }
+    const prev = findPreviousMonthData(ym);
+    if (prev) {
+      data = buildCarryForwardMonth(ym, prev);
+      saveMonth(ym, data);
+      toast("Contas fixas e renda trazidas do mês anterior");
       return data;
     }
     data = emptyMonth();
@@ -507,7 +563,7 @@
     );
   }
 
-  function persistFromDom() {
+  function saveBillsFromDom() {
     const ym = getMonth();
     const data = ensureMonth(ym);
     data.bills = readBillsFromDom();
@@ -515,7 +571,21 @@
       data.customBills = readCustomBillsFromDom(data);
     }
     saveMonth(ym, data);
+    return data;
+  }
+
+  function persistFromDom() {
+    saveBillsFromDom();
     renderAll();
+  }
+
+  /** Salva a cada tecla sem redesenhar #billsList — recriar o HTML ali destruiria o campo focado. */
+  function persistFromDomQuiet() {
+    const data = saveBillsFromDom();
+    renderBillsTotals(data);
+    renderHome();
+    renderStatement();
+    renderProjection();
   }
 
   function addCustomBill() {
@@ -639,6 +709,10 @@
       el.addEventListener("change", onBillChange);
     });
 
+    renderBillsTotals(data);
+  }
+
+  function renderBillsTotals(data) {
     const s = summarize(data);
     const tot = $("#billsTotals");
     if (tot) {
@@ -657,7 +731,7 @@
     return new Date(item.due + "T12:00:00") < new Date(new Date().toDateString());
   }
 
-  function onBillInput() { persistFromDom(); }
+  function onBillInput() { persistFromDomQuiet(); }
 
   function onBillChange(e) {
     const t = e.target;
@@ -689,7 +763,7 @@
           <span class="tx-icon income">${incomeIcon(i.type)}</span>
           <div class="tx-body" style="flex:1">
             <input type="text" class="inc-label" value="${escapeAttr(i.label)}" placeholder="Descrição" style="margin-bottom:0.35rem" />
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem">
+            <div class="tx-2col">
               <div class="amount-row amount-row--income"><span class="prefix">R$</span>
                 <input type="number" class="inc-amount" min="0" step="0.01" value="${i.amount > 0 ? i.amount : ""}" placeholder="0,00" />
               </div>
@@ -761,7 +835,7 @@
           <span class="tx-icon">🛒</span>
           <div class="tx-body" style="flex:1">
             <input type="text" class="ex-label" value="${escapeAttr(e.label)}" placeholder="O que foi?" style="margin-bottom:0.35rem" />
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem">
+            <div class="tx-2col">
               <div class="amount-row"><span class="prefix">R$</span>
                 <input type="number" class="ex-amount" min="0" step="0.01" value="${e.amount > 0 ? e.amount : ""}" placeholder="0,00" />
               </div>
@@ -1381,8 +1455,6 @@
       }
       if (t.closest(".btn-proj-save")) saveProjMonth(t.closest(".btn-proj-save").dataset.month);
     });
-
-    buildList();
   }
 
   window.MinhasDespesasInit = function (uid, email) {
@@ -1390,14 +1462,12 @@
     wireApp();
     recoverAllOrphanMonths();
     refMonth.value = currentYM();
-    applyMonth();
     renderAll();
   };
 
   window.MinhasDespesasRecoverLocal = recoverAllOrphanMonths;
   window.MinhasDespesasSeedAccount = seedKnownAccount;
   window.MinhasDespesasRefresh = function () {
-    applyMonth();
     renderAll();
   };
 
