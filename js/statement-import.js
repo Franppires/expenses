@@ -8,6 +8,7 @@
   const CATEGORIES = [
     { id: "alimentacao", label: "Alimentação", icon: "🍽️" },
     { id: "mercado", label: "Mercado", icon: "🛒" },
+    { id: "minimercado", label: "Mini-mercado", icon: "🏪" },
     { id: "transporte", label: "Transporte", icon: "🚗" },
     { id: "assinaturas", label: "Assinaturas", icon: "📱" },
     { id: "saude", label: "Saúde", icon: "💊" },
@@ -23,7 +24,8 @@
   /** Palavras-chave → categoria (ordem importa: primeira combinação ganha). */
   const RULES = [
     { cat: "alimentacao", words: ["IFOOD", "I FOOD", "RAPPI", "UBER EATS", "UE*", "RESTAURANTE", "RESTAURANT", "LANCHONETE", "PADARIA", "PIZZARIA", "BURGER", "MCDONALDS", "MC DONALD", "BK ", "BURGER KING", "SUBWAY", "HABIBS", "OUTBACK", "STARBUCKS", "CAFE ", "CAFETERIA", "SORVETE", "ACAI", "DELIVERY"] },
-    { cat: "mercado", words: ["SUPERMERCADO", "MERCADO", "ATACADAO", "ATACADÃO", "CARREFOUR", "EXTRA ", "ASSAI", "ASSAÍ", "PÃO DE AÇÚCAR", "PAO DE ACUCAR", "SAMS CLUB", "HORTIFRUTI", "MINIMERCADO", "COPA ", "DIA SUPERMERCADO"] },
+    { cat: "minimercado", words: ["MINIMERCADO", "MINI MERCADO", "MINI-MERCADO", "MERCADINHO", "MERCEARIA", "EMPORIO", "EMPÓRIO", "CONVENIENCIA", "CONVENIÊNCIA", "LOJA DE CONVENIENCIA", "HYDE PARK"] },
+    { cat: "mercado", words: ["SUPERMERCADO", "MERCADO", "ATACADAO", "ATACADÃO", "CARREFOUR", "EXTRA ", "ASSAI", "ASSAÍ", "PÃO DE AÇÚCAR", "PAO DE ACUCAR", "SAMS CLUB", "HORTIFRUTI", "COPA ", "DIA SUPERMERCADO"] },
     { cat: "transporte", words: ["UBER", "99APP", "99 POP", "99*", "CABIFY", "POSTO ", "SHELL", "IPIRANGA", "PETROBRAS", "COMBUSTIVEL", "COMBUSTÍVEL", "ESTACIONAMENTO", "ESTAC ", "PEDAGIO", "PEDÁGIO", "SEM PARAR", "CONECTCAR", "METRO", "Metrô", "CPTМ", "ONIBUS", "ÔNIBUS"] },
     { cat: "assinaturas", words: ["NETFLIX", "SPOTIFY", "DISNEY", "AMAZON PRIME", "PRIME VIDEO", "YOUTUBE", "GOOGLE ONE", "ICLOUD", "APPLE.COM", "MICROSOFT", "ADOBE", "CLARO", "VIVO", "TIM ", "OI ", "NUBANK ULTRAVIOLET", "ANUIDADE"] },
     { cat: "saude", words: ["FARMACIA", "FARMÁCIA", "DROGASIL", "DROGA RAIA", "RAIA", "PACHECO", "PANVEL", "HOSPITAL", "CLINICA", "CLÍNICA", "LABORATORIO", "LABORATÓRIO", "DENTISTA", "ODONTO", "UNIMED", "PLANO DE SAUDE", "PLANO DE SAÚDE"] },

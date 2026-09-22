@@ -1112,8 +1112,14 @@
       const items = data.cardStatement?.items || [];
       if (items.length && Imp) {
         const { byCategory } = Imp.summarizeByCategory(items);
+        const catColors = Charts.CAT_COLORS || [];
         const rows = Imp.CATEGORIES
-          .map((c) => ({ label: c.label, icon: c.icon, amount: byCategory[c.id] || 0 }))
+          .map((c, idx) => ({
+            label: c.label,
+            icon: c.icon,
+            amount: byCategory[c.id] || 0,
+            colorVar: catColors.length ? catColors[idx % catColors.length] : undefined,
+          }))
           .filter((r) => r.amount > 0)
           .sort((a, b) => b.amount - a.amount);
         Charts.renderBarList(catHost, rows, { emptyMessage: "Sem gastos categorizados." });

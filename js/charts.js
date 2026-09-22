@@ -132,5 +132,5 @@
       </div>`;
   }
 
-  window.MinhasDespesasCharts = { renderBarList, renderMeter, renderTrendChart };
+  window.MinhasDespesasCharts = { renderBarList, renderMeter, renderTrendChart, CAT_COLORS };
 })();
