@@ -195,6 +195,122 @@
     return items;
   }
 
+  function parsePdfText(text, yearHint) {
+    const year = yearHint || String(new Date().getFullYear());
+    const lines = String(text || "")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((l) => l.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const skip = /^(total|saldo|pagamento|pagto|page|pagina|página|fatura|vencimento|limite|cliente|cartao|cartão|cpf|agencia|agência|resumo|compras nacionais|compras internacionais|lançamentos|extrato)/i;
+    const items = [];
+    const seen = new Set();
+
+    const moneyAtEnd = /(-?\s*R\$\s*)?(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s*$/;
+    const dateStart = /^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\s+(.+)$/;
+    const dateStartSpaced = /^(\d{1,2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)[A-Z]*\s+(.+)$/i;
+    const months = { JAN: "01", FEV: "02", MAR: "03", ABR: "04", MAI: "05", JUN: "06", JUL: "07", AGO: "08", SET: "09", OUT: "10", NOV: "11", DEZ: "12" };
+
+    lines.forEach((line) => {
+      if (skip.test(line) || line.length < 6) return;
+      const moneyM = line.match(moneyAtEnd);
+      if (!moneyM) return;
+      const amount = parseMoneyBR(moneyM[2]);
+      if (amount <= 0 || amount > 500000) return;
+
+      const before = line.slice(0, moneyM.index).trim();
+      if (!before || skip.test(before)) return;
+
+      let date = "";
+      let label = before;
+
+      let m = before.match(dateStart);
+      if (m) {
+        const d = m[1].padStart(2, "0");
+        const mo = m[2].padStart(2, "0");
+        let y = m[3] || year;
+        if (y.length === 2) y = "20" + y;
+        date = `${y}-${mo}-${d}`;
+        label = m[4].trim();
+      } else {
+        m = before.match(dateStartSpaced);
+        if (m) {
+          const d = m[1].padStart(2, "0");
+          const mo = months[m[2].toUpperCase().slice(0, 3)] || "01";
+          date = `${year}-${mo}-${d}`;
+          label = m[3].trim();
+        }
+      }
+
+      label = label
+        .replace(/^[-–•*]+\s*/, "")
+        .replace(/\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      if (label.length < 2) return;
+      if (/pagamento|pagto|payment|total da fatura|valor total/i.test(label)) return;
+
+      const key = `${date}|${normalizeText(label)}|${amount.toFixed(2)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      items.push({
+        id: uid(),
+        date,
+        label,
+        amount,
+        category: categorize(label),
+        raw: line,
+      });
+    });
+
+    return items;
+  }
+
+  async function extractPdfText(arrayBuffer) {
+    if (typeof pdfjsLib === "undefined") {
+      throw new Error("Leitor de PDF não carregou. Recarregue a página.");
+    }
+    if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const parts = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      let line = "";
+      let lastY = null;
+      content.items.forEach((item) => {
+        const y = item.transform ? item.transform[5] : null;
+        if (lastY != null && y != null && Math.abs(y - lastY) > 2) {
+          parts.push(line.trim());
+          line = "";
+        }
+        line += (item.str || "") + " ";
+        if (y != null) lastY = y;
+      });
+      if (line.trim()) parts.push(line.trim());
+      parts.push("\n");
+    }
+    return parts.join("\n");
+  }
+
+  async function parsePdf(arrayBuffer, fileName, yearHint) {
+    const text = await extractPdfText(arrayBuffer);
+    const items = parsePdfText(text, yearHint);
+    return {
+      source: "pdf",
+      importedAt: Date.now(),
+      fileName: fileName || "fatura.pdf",
+      items,
+      rawTextPreview: text.slice(0, 500),
+    };
+  }
+
   function parseFile(text, fileName) {
     const name = (fileName || "").toLowerCase();
     const trimmed = text.trim();
@@ -214,6 +330,19 @@
       fileName: fileName || "fatura",
       items,
     };
+  }
+
+  /**
+   * Aceita CSV/OFX (texto) ou PDF (ArrayBuffer).
+   */
+  async function parseAny(input, fileName, opts) {
+    const name = (fileName || "").toLowerCase();
+    const yearHint = opts?.yearHint;
+
+    if (name.endsWith(".pdf") || input instanceof ArrayBuffer) {
+      return parsePdf(input, fileName, yearHint);
+    }
+    return parseFile(String(input || ""), fileName);
   }
 
   function summarizeByCategory(items) {
@@ -241,6 +370,9 @@
     categoryMeta,
     categorize,
     parseFile,
+    parsePdf,
+    parsePdfText,
+    parseAny,
     summarizeByCategory,
     fetchOpenFinance,
   };

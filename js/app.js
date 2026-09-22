@@ -1472,12 +1472,19 @@
       toast("Módulo de importação não carregou");
       return;
     }
+    const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+    toast(isPdf ? "Lendo PDF…" : "Lendo arquivo…");
+
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
-        const parsed = Imp.parseFile(String(reader.result || ""), file.name);
+        const yearHint = (getMonth() || "").slice(0, 4);
+        const input = isPdf ? reader.result : String(reader.result || "");
+        const parsed = await Imp.parseAny(input, file.name, { yearHint });
         if (!parsed.items.length) {
-          toast("Nenhum lançamento encontrado no arquivo");
+          toast(isPdf
+            ? "Não achei lançamentos no PDF. Tente CSV/OFX ou outro PDF da fatura."
+            : "Nenhum lançamento encontrado no arquivo");
           return;
         }
         const ym = getMonth();
@@ -1489,10 +1496,12 @@
         toast(`${parsed.items.length} lançamentos importados · R$ ${formatMoney(parsed.items.reduce((s, i) => s + i.amount, 0))}`);
       } catch (e) {
         console.error(e);
-        toast("Não foi possível ler o arquivo");
+        toast(e.message || "Não foi possível ler o arquivo");
       }
     };
-    reader.readAsText(file, "UTF-8");
+    reader.onerror = () => toast("Erro ao abrir o arquivo");
+    if (isPdf) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file, "UTF-8");
   }
 
   function clearCardStatement() {
