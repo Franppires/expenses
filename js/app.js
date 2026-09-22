@@ -1566,9 +1566,12 @@
     }
 
     clearBtn?.classList.remove("hidden");
+    const itauItems = stmt.items.filter((it) => isItauRenegLabel(it.label));
+    const cardItems = stmt.items.filter((it) => !isItauRenegLabel(it.label));
     const { byCategory, total } = Imp
-      ? Imp.summarizeByCategory(stmt.items)
-      : { byCategory: {}, total: stmt.items.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
+      ? Imp.summarizeByCategory(cardItems)
+      : { byCategory: {}, total: cardItems.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
+    const itauTotal = itauItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
 
     if (cardStatementFilter && !(byCategory[cardStatementFilter] > 0)) cardStatementFilter = null;
 
@@ -1598,7 +1601,11 @@
         <strong class="amt-neg">R$ ${formatMoney(total)}</strong>
       </div>
       ${catRows}
-      <p class="hint" style="margin-top:0.65rem">Toque numa categoria para filtrar a lista. Total aplicado na conta <strong>Cartão de crédito</strong>.</p>
+      <p class="hint" style="margin-top:0.65rem">
+        Toque numa categoria para filtrar.
+        Cartão: <strong>R$ ${formatMoney(total)}</strong>
+        ${itauTotal > 0 ? ` · Reneg. Itaú (${itauItems.length} parc.): <strong>R$ ${formatMoney(itauTotal)}</strong> → conta Empréstimo` : ""}
+      </p>
     `;
 
     summary.querySelectorAll("[data-cat-filter]").forEach((btn) => {
@@ -1625,17 +1632,18 @@
       .slice()
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
       .map((it) => {
+        const isItau = isItauRenegLabel(it.label);
         const meta = Imp ? Imp.categoryMeta(it.category) : { icon: "📦", label: it.category || "Outros", id: "outros" };
-        return `<div class="tx-item" data-stmt-item="${it.id}">
-          <span class="tx-icon">${meta.icon}</span>
+        return `<div class="tx-item${isItau ? " tx-item--itau" : ""}" data-stmt-item="${it.id}">
+          <span class="tx-icon">${isItau ? "🏦" : meta.icon}</span>
           <div class="tx-body">
-            <div class="tx-title">${escapeAttr(it.label)}</div>
-            <div class="tx-meta">${formatDateBRShort(it.date)} · ${escapeAttr(meta.label)}</div>
-            <select class="stmt-cat-select" data-id="${it.id}" aria-label="Categoria">
+            <div class="tx-title">${escapeAttr(it.label)}${isItau ? ' <span class="badge badge-paid">→ Empréstimo Itaú</span>' : ""}</div>
+            <div class="tx-meta">${formatDateBRShort(it.date)} · ${isItau ? "Empréstimo" : escapeAttr(meta.label)}</div>
+            ${isItau ? "" : `<select class="stmt-cat-select" data-id="${it.id}" aria-label="Categoria">
               ${(Imp ? Imp.CATEGORIES : []).map((c) =>
                 `<option value="${c.id}"${c.id === it.category ? " selected" : ""}>${c.icon} ${c.label}</option>`
               ).join("")}
-            </select>
+            </select>`}
           </div>
           <span class="tx-amount expense">R$ ${formatMoney(it.amount)}</span>
         </div>`;
@@ -1661,10 +1669,29 @@
     });
   }
 
-  /** "Renegociação Itaú" na fatura é o mesmo empréstimo já rastreado na conta fixa "itau". */
+  /** Renegociação Itaú na fatura = empréstimo fixo "itau" (ex.: "Renegociação Itaú 42/70", "42/60"). */
   function isItauRenegLabel(label) {
-    const t = String(label || "");
-    return /renegocia/i.test(t) && /ita[uú]/i.test(t);
+    const t = String(label || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase();
+    const hasItau = /\bITAU\b/.test(t) || t.includes("ITAU");
+    const hasReneg = /RENEG/.test(t) || /RENEGOCI/.test(t);
+    return hasItau && hasReneg;
+  }
+
+  /** Próxima parcela de itens tipo 42/70 → mesma quantia no mês seguinte. */
+  function estimateNextFromInstallments(items) {
+    let total = 0;
+    (items || []).forEach((it) => {
+      const m = String(it.label || "").match(/(\d{1,2})\s*\/\s*(\d{1,2})\b/);
+      if (!m) return;
+      const cur = parseInt(m[1], 10);
+      const max = parseInt(m[2], 10);
+      if (!cur || !max || cur >= max) return;
+      total += Number(it.amount) || 0;
+    });
+    return Math.round(total * 100) / 100;
   }
 
   function applyCardStatementToBill(data) {
@@ -1682,47 +1709,50 @@
     if (itauItems.length) {
       const itauTotal = itauItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
       if (!data.bills.itau) data.bills.itau = emptyBill();
-      data.bills.itau = { ...normalizeBill(data.bills.itau), amount: Math.round(itauTotal * 100) / 100 };
+      data.bills.itau = { ...normalizeBill(data.bills.itau), amount: Math.round(itauTotal * 100) / 100, estimated: false };
     }
     return data;
   }
 
   /**
-   * A fatura já informa quanto das compras parceladas vai cair na PRÓXIMA
-   * fatura ("Saldo total de compras parceladas"). Usa isso pra deixar um
-   * valor estimado no Cartão de crédito do mês seguinte, que se substitui
-   * sozinho quando a fatura real daquele mês for importada (ou se o valor
-   * for editado à mão).
-   *
-   * Fallback: soma as próximas parcelas detectadas nos lançamentos (ex.: 02/06).
+   * Próximo mês:
+   * - Cartão: saldo de compras parceladas (sem Reneg. Itaú) ou fallback das parcelas 0X/0Y
+   * - Empréstimo Itaú: soma das próximas Reneg. (ex. 43/70 + 43/60)
+   * Valores estimados somem quando importar a fatura daquele mês.
    */
-  function estimateNextCardFromItems(items) {
-    let total = 0;
-    (items || []).forEach((it) => {
-      const m = String(it.label || "").match(/(?:parc(?:ela)?\.?\s*)?(\d{1,2})\s*\/\s*(\d{1,2})\b/i);
-      if (!m) return;
-      const cur = parseInt(m[1], 10);
-      const max = parseInt(m[2], 10);
-      if (!cur || !max || cur >= max) return;
-      // Próxima fatura: mais uma parcela do mesmo valor
-      total += Number(it.amount) || 0;
-    });
-    return Math.round(total * 100) / 100;
-  }
-
   function applyNextMonthEstimate(ym, parsed) {
-    let est = Number(parsed?.nextInvoiceEstimate) || 0;
-    if (est <= 0) est = estimateNextCardFromItems(parsed?.items);
-    if (est <= 0) return 0;
+    const items = parsed?.items || [];
+    const itauItems = items.filter((i) => isItauRenegLabel(i.label));
+    const cardItems = items.filter((i) => !isItauRenegLabel(i.label));
+
+    const itauNext = estimateNextFromInstallments(itauItems);
+    let cardNext = Number(parsed?.nextInvoiceEstimate) || 0;
+    if (cardNext > 0) {
+      // O "saldo de parceladas" do PDF costuma incluir a Reneg. Itaú — tira dela.
+      cardNext = Math.max(0, Math.round((cardNext - itauNext) * 100) / 100);
+    } else {
+      cardNext = estimateNextFromInstallments(cardItems);
+    }
+
     const nm = addMonths(ym, 1);
     const ndata = ensureMonth(nm);
     if (!ndata.bills) ndata.bills = {};
-    const cur = normalizeBill(ndata.bills.card);
-    // Não sobrescreve um valor real já lançado (importado ou digitado) pro mês seguinte.
-    if (cur.amount > 0 && !cur.estimated) return 0;
-    ndata.bills.card = { ...cur, amount: Math.round(est * 100) / 100, estimated: true };
-    saveMonth(nm, ndata);
-    return est;
+
+    if (cardNext > 0) {
+      const cur = normalizeBill(ndata.bills.card);
+      if (!(cur.amount > 0 && !cur.estimated)) {
+        ndata.bills.card = { ...cur, amount: cardNext, estimated: true };
+      }
+    }
+    if (itauNext > 0) {
+      const cur = normalizeBill(ndata.bills.itau);
+      if (!(cur.amount > 0 && !cur.estimated)) {
+        ndata.bills.itau = { ...cur, amount: itauNext, estimated: true };
+      }
+    }
+
+    if (cardNext > 0 || itauNext > 0) saveMonth(nm, ndata);
+    return { cardNext, itauNext };
   }
 
   function importCardStatementFile(file) {
@@ -1754,12 +1784,15 @@
         saveMonth(ym, data);
         const nextEst = applyNextMonthEstimate(ym, parsed);
         renderAll();
+        const itauCount = (parsed.items || []).filter((i) => isItauRenegLabel(i.label)).length;
         if (total > 25000) {
           toast(`Atenção: total R$ ${formatMoney(total)}. Confira se ainda entrou limite/resumo.`);
-        } else if (nextEst > 0) {
-          toast(`${parsed.items.length} lançamentos · R$ ${formatMoney(total)} · próximo mês ~R$ ${formatMoney(nextEst)}`);
         } else {
-          toast(`${parsed.items.length} lançamentos · R$ ${formatMoney(total)}`);
+          let msg = `${parsed.items.length} lançamentos · cartão R$ ${formatMoney(total - (parsed.items.filter((i) => isItauRenegLabel(i.label)).reduce((s, i) => s + i.amount, 0)))}`;
+          if (itauCount) msg += ` · Itaú ${itauCount} parc.`;
+          if (nextEst?.cardNext > 0) msg += ` · próx. cartão ~R$ ${formatMoney(nextEst.cardNext)}`;
+          if (nextEst?.itauNext > 0) msg += ` · próx. Itaú ~R$ ${formatMoney(nextEst.itauNext)}`;
+          toast(msg);
         }
       } catch (e) {
         console.error(e);
