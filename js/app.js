@@ -1439,6 +1439,8 @@
     return `${d}/${m}`;
   }
 
+  let cardStatementFilter = null;
+
   function renderCardStatement() {
     const data = ensureMonth(getMonth());
     const stmt = data.cardStatement;
@@ -1449,6 +1451,7 @@
 
     const Imp = window.MinhasDespesasImport;
     if (!stmt || !stmt.items || !stmt.items.length) {
+      cardStatementFilter = null;
       summary.classList.add("hidden");
       summary.innerHTML = "";
       list.innerHTML = '<p class="empty-state">Nenhuma fatura importada neste mês. Exporte CSV/OFX no banco e toque em Importar.</p>';
@@ -1461,6 +1464,8 @@
       ? Imp.summarizeByCategory(stmt.items)
       : { byCategory: {}, total: stmt.items.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
 
+    if (cardStatementFilter && !(byCategory[cardStatementFilter] > 0)) cardStatementFilter = null;
+
     const cats = Imp ? Imp.CATEGORIES : [];
     const catRows = cats
       .filter((c) => (byCategory[c.id] || 0) > 0)
@@ -1468,11 +1473,12 @@
       .map((c) => {
         const amt = byCategory[c.id] || 0;
         const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
-        return `<div class="stmt-cat-row">
+        const active = cardStatementFilter === c.id;
+        return `<button type="button" class="stmt-cat-row${active ? " active" : ""}" data-cat-filter="${c.id}">
           <span class="stmt-cat-label">${c.icon} ${c.label}</span>
           <span class="stmt-cat-bar"><span style="width:${pct}%"></span></span>
           <span class="stmt-cat-amt">R$ ${formatMoney(amt)}</span>
-        </div>`;
+        </button>`;
       })
       .join("");
 
@@ -1486,10 +1492,30 @@
         <strong class="amt-neg">R$ ${formatMoney(total)}</strong>
       </div>
       ${catRows}
-      <p class="hint" style="margin-top:0.65rem">Total aplicado na conta <strong>Cartão de crédito</strong>.</p>
+      <p class="hint" style="margin-top:0.65rem">Toque numa categoria para filtrar a lista. Total aplicado na conta <strong>Cartão de crédito</strong>.</p>
     `;
 
-    list.innerHTML = stmt.items
+    summary.querySelectorAll("[data-cat-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const catId = btn.dataset.catFilter;
+        cardStatementFilter = cardStatementFilter === catId ? null : catId;
+        renderCardStatement();
+      });
+    });
+
+    const filteredItems = cardStatementFilter
+      ? stmt.items.filter((it) => it.category === cardStatementFilter)
+      : stmt.items;
+
+    const filterNote = cardStatementFilter
+      ? `<div class="stmt-filter-note">
+          Filtrando por <strong>${escapeAttr(Imp ? Imp.categoryMeta(cardStatementFilter).label : cardStatementFilter)}</strong>
+          (${filteredItems.length} de ${stmt.items.length})
+          <button type="button" class="btn btn-ghost btn-sm" id="btnClearCatFilter">Limpar filtro</button>
+        </div>`
+      : "";
+
+    list.innerHTML = filterNote + filteredItems
       .slice()
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
       .map((it) => {
@@ -1508,7 +1534,12 @@
           <span class="tx-amount expense">R$ ${formatMoney(it.amount)}</span>
         </div>`;
       })
-      .join("");
+      .join("") || (cardStatementFilter ? '<p class="empty-state">Nenhum lançamento nessa categoria.</p>' : "");
+
+    $("#btnClearCatFilter")?.addEventListener("click", () => {
+      cardStatementFilter = null;
+      renderCardStatement();
+    });
 
     list.querySelectorAll(".stmt-cat-select").forEach((sel) => {
       sel.addEventListener("change", () => {
@@ -1583,6 +1614,7 @@
     const ym = getMonth();
     const data = ensureMonth(ym);
     data.cardStatement = null;
+    cardStatementFilter = null;
     saveMonth(ym, data);
     renderAll();
     toast("Fatura removida deste mês");
@@ -1607,6 +1639,7 @@
 
     refMonth.addEventListener("change", () => {
       projOpenMonth = null;
+      cardStatementFilter = null;
       renderAll();
     });
 

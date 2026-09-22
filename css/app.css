@@ -1207,7 +1207,35 @@ select:focus-visible,
   align-items: center;
   margin-bottom: 0.4rem;
   font-size: 0.75rem;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  padding: 0.25rem 0.35rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
+
+.stmt-cat-row:hover { background: var(--surface-2); }
+
+.stmt-cat-row.active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+}
+
+.stmt-filter-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  padding: 0.5rem 0.1rem 0.75rem;
+}
+
+.stmt-filter-note strong { color: var(--text); }
 
 .stmt-cat-label {
   font-weight: 600;
