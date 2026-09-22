@@ -216,6 +216,9 @@
     Object.values(data.bills || {}).forEach((b) => { s += Number(b.amount) || 0; });
     if ((data.customBills || []).length) s += 1;
     if ((data.extras || []).length) s += 1;
+    if (data.cardStatement?.items?.length) {
+      data.cardStatement.items.forEach((i) => { s += Number(i.amount) || 0; });
+    }
     return s;
   }
 

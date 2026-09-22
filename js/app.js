@@ -44,6 +44,7 @@
   function ensureMonthShape(data) {
     if (!data.customBills) data.customBills = [];
     if (!data.bills) data.bills = {};
+    if (!data.cardStatement) data.cardStatement = null;
     BILLS.forEach((b) => {
       if (!data.bills[b.id]) data.bills[b.id] = emptyBill();
     });
@@ -52,6 +53,10 @@
       if (!data.bills[cb.id]) data.bills[cb.id] = emptyBill();
     });
     return data;
+  }
+
+  function emptyCardStatement() {
+    return { source: "csv", importedAt: 0, fileName: "", items: [] };
   }
 
   const PATCHES_KEY_BASE = "minhas-despesas-patches-done";
@@ -215,7 +220,7 @@
   function emptyMonth() {
     const bills = {};
     BILLS.forEach((b) => { bills[b.id] = emptyBill(); });
-    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [], customBills: [] };
+    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [], customBills: [], cardStatement: null };
   }
 
   function migrateLegacy(ym, raw) {
@@ -1350,10 +1355,153 @@
     renderHome();
     renderStatement();
     renderBills();
+    renderCardStatement();
     renderIncome();
     renderExtras();
     renderProjection();
     renderDataStats();
+  }
+
+  function formatDateBRShort(iso) {
+    if (!iso) return "—";
+    const [y, m, d] = iso.split("-");
+    if (!d) return iso;
+    return `${d}/${m}`;
+  }
+
+  function renderCardStatement() {
+    const data = ensureMonth(getMonth());
+    const stmt = data.cardStatement;
+    const summary = $("#cardStatementSummary");
+    const list = $("#cardStatementList");
+    const clearBtn = $("#btnClearStatement");
+    if (!summary || !list) return;
+
+    const Imp = window.MinhasDespesasImport;
+    if (!stmt || !stmt.items || !stmt.items.length) {
+      summary.classList.add("hidden");
+      summary.innerHTML = "";
+      list.innerHTML = '<p class="empty-state">Nenhuma fatura importada neste mês. Exporte CSV/OFX no banco e toque em Importar.</p>';
+      clearBtn?.classList.add("hidden");
+      return;
+    }
+
+    clearBtn?.classList.remove("hidden");
+    const { byCategory, total } = Imp
+      ? Imp.summarizeByCategory(stmt.items)
+      : { byCategory: {}, total: stmt.items.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
+
+    const cats = Imp ? Imp.CATEGORIES : [];
+    const catRows = cats
+      .filter((c) => (byCategory[c.id] || 0) > 0)
+      .sort((a, b) => (byCategory[b.id] || 0) - (byCategory[a.id] || 0))
+      .map((c) => {
+        const amt = byCategory[c.id] || 0;
+        const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
+        return `<div class="stmt-cat-row">
+          <span class="stmt-cat-label">${c.icon} ${c.label}</span>
+          <span class="stmt-cat-bar"><span style="width:${pct}%"></span></span>
+          <span class="stmt-cat-amt">R$ ${formatMoney(amt)}</span>
+        </div>`;
+      })
+      .join("");
+
+    summary.classList.remove("hidden");
+    summary.innerHTML = `
+      <div class="stmt-cat-head">
+        <div>
+          <strong>${stmt.items.length} lançamento(s)</strong>
+          <span class="hint"> · ${escapeAttr(stmt.fileName || stmt.source || "import")}</span>
+        </div>
+        <strong class="amt-neg">R$ ${formatMoney(total)}</strong>
+      </div>
+      ${catRows}
+      <p class="hint" style="margin-top:0.65rem">Total aplicado na conta <strong>Cartão de crédito</strong>.</p>
+    `;
+
+    list.innerHTML = stmt.items
+      .slice()
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+      .map((it) => {
+        const meta = Imp ? Imp.categoryMeta(it.category) : { icon: "📦", label: it.category || "Outros", id: "outros" };
+        return `<div class="tx-item" data-stmt-item="${it.id}">
+          <span class="tx-icon">${meta.icon}</span>
+          <div class="tx-body">
+            <div class="tx-title">${escapeAttr(it.label)}</div>
+            <div class="tx-meta">${formatDateBRShort(it.date)} · ${escapeAttr(meta.label)}</div>
+            <select class="stmt-cat-select" data-id="${it.id}" aria-label="Categoria">
+              ${(Imp ? Imp.CATEGORIES : []).map((c) =>
+                `<option value="${c.id}"${c.id === it.category ? " selected" : ""}>${c.icon} ${c.label}</option>`
+              ).join("")}
+            </select>
+          </div>
+          <span class="tx-amount expense">R$ ${formatMoney(it.amount)}</span>
+        </div>`;
+      })
+      .join("");
+
+    list.querySelectorAll(".stmt-cat-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const d = ensureMonth(getMonth());
+        if (!d.cardStatement?.items) return;
+        const item = d.cardStatement.items.find((x) => x.id === sel.dataset.id);
+        if (item) {
+          item.category = sel.value;
+          saveMonth(getMonth(), d);
+          renderCardStatement();
+        }
+      });
+    });
+  }
+
+  function applyCardStatementToBill(data) {
+    if (!data.cardStatement?.items?.length) return data;
+    const Imp = window.MinhasDespesasImport;
+    const total = Imp
+      ? Imp.summarizeByCategory(data.cardStatement.items).total
+      : data.cardStatement.items.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    if (!data.bills) data.bills = {};
+    if (!data.bills.card) data.bills.card = emptyBill();
+    data.bills.card.amount = Math.round(total * 100) / 100;
+    return data;
+  }
+
+  function importCardStatementFile(file) {
+    const Imp = window.MinhasDespesasImport;
+    if (!Imp) {
+      toast("Módulo de importação não carregou");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = Imp.parseFile(String(reader.result || ""), file.name);
+        if (!parsed.items.length) {
+          toast("Nenhum lançamento encontrado no arquivo");
+          return;
+        }
+        const ym = getMonth();
+        const data = ensureMonth(ym);
+        data.cardStatement = parsed;
+        applyCardStatementToBill(data);
+        saveMonth(ym, data);
+        renderAll();
+        toast(`${parsed.items.length} lançamentos importados · R$ ${formatMoney(parsed.items.reduce((s, i) => s + i.amount, 0))}`);
+      } catch (e) {
+        console.error(e);
+        toast("Não foi possível ler o arquivo");
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  }
+
+  function clearCardStatement() {
+    const ym = getMonth();
+    const data = ensureMonth(ym);
+    data.cardStatement = null;
+    saveMonth(ym, data);
+    renderAll();
+    toast("Fatura removida deste mês");
   }
 
   function switchView(name) {
@@ -1399,6 +1547,14 @@
     });
 
     $("#btnAddBill")?.addEventListener("click", addCustomBill);
+
+    $("#btnImportStatement")?.addEventListener("click", () => $("#statementFile")?.click());
+    $("#statementFile")?.addEventListener("change", (e) => {
+      const f = e.target.files?.[0];
+      if (f) importCardStatementFile(f);
+      e.target.value = "";
+    });
+    $("#btnClearStatement")?.addEventListener("click", clearCardStatement);
 
     document.getElementById("view-bills")?.addEventListener("click", (e) => {
       const btn = e.target.closest(".btn-del-bill");

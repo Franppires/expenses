@@ -985,7 +985,71 @@ select:focus-visible,
   line-height: 1.45;
 }
 
-.pwa-install .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.hint-muted { opacity: 0.75; font-size: 0.75rem; display: block; margin-top: 0.25rem; }
+
+.stmt-cat-summary {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.stmt-cat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.stmt-cat-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.stmt-cat-label {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stmt-cat-bar {
+  height: 0.45rem;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stmt-cat-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand), #818cf8);
+  border-radius: 999px;
+  min-width: 2px;
+}
+
+.stmt-cat-amt {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stmt-cat-list { margin-top: 0.85rem; }
+
+.stmt-cat-select {
+  margin-top: 0.35rem;
+  font-size: 0.75rem !important;
+  min-height: 2rem !important;
+  padding: 0.3rem 1.75rem 0.3rem 0.45rem !important;
+}
 
 .sync-help {
   margin-top: 0.75rem;

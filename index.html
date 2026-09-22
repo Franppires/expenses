@@ -135,6 +135,21 @@
           <button type="button" class="btn btn-add" id="btnAddBill">+ Nova conta</button>
         </div>
       </div>
+
+      <div class="card" id="cardStatementCard">
+        <div class="card-head"><h2>Fatura do cartão</h2><span>Importar</span></div>
+        <p class="hint" style="margin:0 0 0.75rem">
+          Baixe o CSV ou OFX no app/site do banco e importe aqui. O app categoriza os gastos e atualiza o valor do <strong>Cartão de crédito</strong>.
+          <span class="hint-muted">Open Finance virá depois.</span>
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btnImportStatement">Importar fatura (CSV/OFX)</button>
+          <button type="button" class="btn btn-ghost hidden" id="btnClearStatement">Limpar fatura</button>
+          <input type="file" id="statementFile" accept=".csv,.ofx,.qfx,.txt,text/csv,application/x-ofx" hidden />
+        </div>
+        <div id="cardStatementSummary" class="stmt-cat-summary hidden"></div>
+        <div id="cardStatementList" class="tx-list stmt-cat-list"></div>
+      </div>
     </section>
 
     <!-- RENDA -->
@@ -277,6 +292,7 @@ service cloud.firestore {
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="js/firebase-config.js"></script>
+  <script src="js/statement-import.js"></script>
   <script src="js/app.js"></script>
   <script src="js/cloud.js"></script>
   <script src="js/pwa.js"></script>
