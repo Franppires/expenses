@@ -796,6 +796,11 @@ select:focus-visible,
   background: linear-gradient(180deg, var(--overdue-tint) 0%, var(--surface) 100%);
 }
 
+.tx-item--itau {
+  border-color: #a7f3d0;
+  background: linear-gradient(90deg, var(--income-soft) 0%, var(--surface) 40%);
+}
+
 .tx-icon {
   width: 2.35rem;
   height: 2.35rem;
