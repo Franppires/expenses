@@ -201,6 +201,10 @@
       || /\b(TOTAL DA FATURA|VALOR TOTAL|VALOR DA FATURA|LIMITE TOTAL|LIMITE DE CREDITO|LIMITE DISPONIVEL|SALDO ANTERIOR|SALDO ATUAL|PAGAMENTO RECEBIDO|PAGAMENTO EFETUADO|CREDITO EM CONTA|LANCAMENTO FUTURO|COMPRAS NACIONAIS|COMPRAS INTERNACIONAIS|RESUMO DA FATURA|TOTAL DE COMPRAS|TOTAL GERAL)\b/.test(t);
   }
 
+  /** Início/fim da tabela real de compras — ignora simulação de parcelamento, resumo e "próxima fatura". */
+  const SECTION_START = /^despesas da fatura$/i;
+  const SECTION_END = /^(limite de cr[eé]dito total|pr[oó]xima fatura|encargos financeiros|fale com a gente|como est[aá] distribu[ií]do)/i;
+
   function parsePdfText(text, yearHint) {
     const year = yearHint || String(new Date().getFullYear());
     const lines = String(text || "")
@@ -212,22 +216,31 @@
     const items = [];
     const seen = new Set();
 
-    // Valor no fim: 1.234,56 ou 45,90 (não pega "65.000" sem centavos de limite se evitar abaixo)
-    const moneyAtEnd = /(?:R\$\s*)?(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s*[CD]?\s*$/i;
+    // Valor no fim: precisa vir com "R$" explícito — evita casar percentuais, código de barras etc.
+    const moneyAtEnd = /([+-])?\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*[CD]?\s*$/i;
     const dateStart = /^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\s+(.+)$/;
-    const dateStartSpaced = /^(\d{1,2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)[A-ZÁÉÍÓÚ]*\.?\s+(.+)$/i;
+    // Cobre "12 JAN 2026", "12 de jan. 2026", "12 de janeiro de 2026" etc.
+    const dateStartSpaced = /^(\d{1,2})\s*(?:de\s+)?([A-Za-zçÇ]{3})[A-Za-zçÇ]*\.?\s*(?:de\s+)?(\d{2,4})?\s+(.+)$/i;
     const months = { JAN: "01", FEV: "02", MAR: "03", ABR: "04", MAI: "05", JUN: "06", JUL: "07", AGO: "08", SET: "09", OUT: "10", NOV: "11", DEZ: "12" };
 
     // Máximo razoável por compra individual (fatura pessoal)
     const MAX_ITEM = 15000;
 
+    let inSection = false;
+
     lines.forEach((line) => {
+      if (SECTION_START.test(line)) { inSection = true; return; }
+      if (SECTION_END.test(line)) { inSection = false; return; }
+      if (!inSection) return;
+
       if (line.length < 8) return;
       if (isJunkLabel(line)) return;
 
       const moneyM = line.match(moneyAtEnd);
       if (!moneyM) return;
-      const amount = parseMoneyBR(moneyM[1]);
+      // "+" no início do valor = crédito (pagamento recebido, estorno) — não é despesa.
+      if (moneyM[1] === "+") return;
+      const amount = parseMoneyBR(moneyM[2]);
       if (amount <= 0 || amount > MAX_ITEM) return;
 
       const before = line.slice(0, moneyM.index).trim();
@@ -246,12 +259,14 @@
         label = m[4].trim();
       } else {
         m = before.match(dateStartSpaced);
-        if (m) {
+        const moKey = m ? normalizeText(m[2]).slice(0, 3) : "";
+        if (m && months[moKey]) {
           const d = m[1].padStart(2, "0");
-          const moKey = normalizeText(m[2]).slice(0, 3);
-          const mo = months[moKey] || "01";
-          date = `${year}-${mo}-${d}`;
-          label = m[3].trim();
+          const mo = months[moKey];
+          let y = m[3] || year;
+          if (y.length === 2) y = "20" + y;
+          date = `${y}-${mo}-${d}`;
+          label = m[4].trim();
         }
       }
 
@@ -261,6 +276,7 @@
       label = label
         .replace(/^[-–•*]+\s*/, "")
         .replace(/\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/, "")
+        .replace(/\s+[-–]\s*$/, "")
         .replace(/\s{2,}/g, " ")
         .trim();
 

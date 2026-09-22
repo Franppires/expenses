@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/app.css?v=8" />
+  <link rel="stylesheet" href="css/app.css?v=9" />
 </head>
 <body>
   <!-- LOGIN -->
@@ -59,6 +59,50 @@
   </div>
 
   <div id="appRoot" class="hidden">
+  <div class="app-layout">
+  <aside class="sidebar" aria-label="Menu principal">
+    <div class="sidebar-brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+      </div>
+      <span>Minhas despesas</span>
+    </div>
+    <p class="sidebar-group-label">Menu</p>
+    <button type="button" class="nav-btn side-nav-btn active" data-view="home" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>
+      Início
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="statement">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg>
+      Extrato
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="bills">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+      Contas
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="income">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      Renda
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="extras">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+      Gastos
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="projection">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      Futuro
+    </button>
+    <button type="button" class="nav-btn side-nav-btn" data-view="data">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Dados
+    </button>
+    <div class="sidebar-foot">
+      <button type="button" class="btn btn-ghost btn-sm" id="btnLogoutSide" title="Sair">Sair</button>
+    </div>
+  </aside>
+
   <div class="app-shell">
     <header class="app-top">
       <div>
@@ -90,6 +134,26 @@
         <p class="hero-note">Com base em <strong>todas as despesas programadas</strong> menos <strong>toda a renda</strong> do mês.</p>
       </div>
       <div class="metric-grid" id="homeMetrics"></div>
+
+      <div class="charts-grid">
+        <div class="card chart-card">
+          <div class="card-head"><h2>Gastos por categoria</h2><span>Fatura do cartão</span></div>
+          <div id="chartCategory"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-head"><h2>Progresso de pagamento</h2><span id="chartProgressMonth">—</span></div>
+          <div id="chartProgress"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-head"><h2>Fixas x variáveis</h2><span>Contas do mês</span></div>
+          <div id="chartFixedVariable"></div>
+        </div>
+        <div class="card chart-card chart-card--wide">
+          <div class="card-head"><h2>Evolução mensal</h2><span>Entradas x saídas</span></div>
+          <div id="chartTrend"></div>
+        </div>
+      </div>
+
       <div class="card card--spaced">
         <div class="card-head"><h2>Próximos vencimentos</h2><span>Pendentes</span></div>
         <div id="upcomingList" class="tx-list"></div>
@@ -256,6 +320,7 @@ service cloud.firestore {
     </section>
   </div>
   </div>
+  </div>
 
   <nav class="bottom-nav hidden" aria-label="Menu principal">
     <div class="bottom-nav-inner">
@@ -296,10 +361,11 @@ service cloud.firestore {
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="js/firebase-config.js?v=8"></script>
-  <script src="js/statement-import.js?v=8"></script>
-  <script src="js/app.js?v=8"></script>
-  <script src="js/cloud.js?v=8"></script>
-  <script src="js/pwa.js?v=8"></script>
+  <script src="js/firebase-config.js?v=9"></script>
+  <script src="js/statement-import.js?v=9"></script>
+  <script src="js/charts.js?v=9"></script>
+  <script src="js/app.js?v=9"></script>
+  <script src="js/cloud.js?v=9"></script>
+  <script src="js/pwa.js?v=9"></script>
 </body>
 </html>

@@ -1082,6 +1082,70 @@
           </div>`).join("")
         : '<p class="empty-state">Nenhuma conta pendente com valor.</p>';
     }
+
+    renderHomeCharts(data, s, ym);
+  }
+
+  /** Lê um mês salvo sem criar/alterar nada — usado só para montar gráficos históricos. */
+  function peekMonth(ym) {
+    try {
+      const raw = localStorage.getItem(storageKey(ym));
+      if (!raw) return null;
+      return ensureMonthShape(migrateLegacy(ym, JSON.parse(raw)));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function monthShortLabel(ym) {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString("pt-BR", { month: "short" }).replace(".", "");
+  }
+
+  function renderHomeCharts(data, s, ym) {
+    const Charts = window.MinhasDespesasCharts;
+    if (!Charts) return;
+    const Imp = window.MinhasDespesasImport;
+
+    const catHost = $("#chartCategory");
+    if (catHost) {
+      const items = data.cardStatement?.items || [];
+      if (items.length && Imp) {
+        const { byCategory } = Imp.summarizeByCategory(items);
+        const rows = Imp.CATEGORIES
+          .map((c) => ({ label: c.label, icon: c.icon, amount: byCategory[c.id] || 0 }))
+          .filter((r) => r.amount > 0)
+          .sort((a, b) => b.amount - a.amount);
+        Charts.renderBarList(catHost, rows, { emptyMessage: "Sem gastos categorizados." });
+      } else {
+        Charts.renderBarList(catHost, [], { emptyMessage: "Importe a fatura do cartão (aba Contas) para ver por categoria." });
+      }
+    }
+
+    const progHost = $("#chartProgress");
+    if (progHost) Charts.renderMeter(progHost, s.totalPaid, s.totalExpenses);
+    const progMonth = $("#chartProgressMonth");
+    if (progMonth) progMonth.textContent = formatMonthTitle(ym);
+
+    const fvHost = $("#chartFixedVariable");
+    if (fvHost) {
+      Charts.renderBarList(fvHost, [
+        { label: "Contas fixas", icon: "🏠", amount: s.billsFixed, colorVar: "--cat-1" },
+        { label: "Contas variáveis", icon: "⚡", amount: s.billsVariable, colorVar: "--cat-2" },
+      ], { emptyMessage: "Nenhuma conta com valor neste mês." });
+    }
+
+    const trendHost = $("#chartTrend");
+    if (trendHost) {
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const m = addMonths(ym, -i);
+        const md = peekMonth(m);
+        const ms = md ? summarize(md) : { totalIncome: 0, totalExpenses: 0 };
+        months.push({ label: monthShortLabel(m), income: ms.totalIncome, expense: ms.totalExpenses });
+      }
+      Charts.renderTrendChart(trendHost, months);
+    }
   }
 
   function formatDateBR(iso) {

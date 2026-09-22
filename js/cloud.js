@@ -510,6 +510,7 @@
 
     $("#btnLogout")?.addEventListener("click", () => { signOutSafe(); });
     $("#btnLogoutData")?.addEventListener("click", () => { signOutSafe(); });
+    $("#btnLogoutSide")?.addEventListener("click", () => { signOutSafe(); });
     $("#btnRetrySync")?.addEventListener("click", () => retrySync());
     $("#btnRetrySyncData")?.addEventListener("click", () => retrySync());
 
