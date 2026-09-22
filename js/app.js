@@ -4,24 +4,92 @@
   const STORAGE_PREFIX = "minhas-despesas:";
   const STORAGE_PREFIX_V2 = "minhas-despesas-v2:";
 
+  const THEME_KEY = "minhas-despesas-theme";
+
+  function getStoredTheme() {
+    try {
+      return localStorage.getItem(THEME_KEY) || "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function prefersDarkOS() {
+    return !!window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+
+  function isDarkActive() {
+    const stored = getStoredTheme();
+    return stored === "dark" || (!stored && prefersDarkOS());
+  }
+
+  function updateThemeToggleLabel() {
+    const icon = isDarkActive() ? "☀️" : "🌙";
+    const btn = document.getElementById("btnThemeToggle");
+    if (btn) btn.textContent = icon;
+    const btnSide = document.getElementById("btnThemeToggleSide");
+    if (btnSide) btnSide.textContent = `${icon} Tema`;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "dark" || theme === "light") {
+      document.documentElement.setAttribute("data-theme", theme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", isDarkActive() ? "#0f1115" : "#4f46e5");
+    updateThemeToggleLabel();
+  }
+
+  function toggleTheme() {
+    const next = isDarkActive() ? "light" : "dark";
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch (_) { /* ignore */ }
+    applyTheme(next);
+  }
+
+  // Aplica o tema o quanto antes, pra não piscar o tema errado no primeiro paint.
+  applyTheme(getStoredTheme());
+
   const BILLS = [
-    { id: "itau", label: "Empréstimo (Reneg. Itaú)", icon: "🏦", kind: "fixed" },
-    { id: "contrib", label: "Contribuição das", icon: "🤝", kind: "fixed" },
-    { id: "cond", label: "Condomínio Boa Vista", icon: "🏠", kind: "fixed" },
-    { id: "fin", label: "Financiamento", icon: "📋", kind: "fixed" },
-    { id: "cpfl", label: "Luz (CPFL)", icon: "⚡", kind: "variable" },
-    { id: "card", label: "Cartão de crédito", icon: "💳", kind: "variable" },
+    { id: "itau", label: "Empréstimo (Reneg. Itaú)", icon: "🏦", kind: "fixed", category: "emprestimo" },
+    { id: "contrib", label: "Contribuição das", icon: "🤝", kind: "fixed", category: "outros" },
+    { id: "cond", label: "Condomínio Boa Vista", icon: "🏠", kind: "fixed", category: "moradia" },
+    { id: "fin", label: "Financiamento", icon: "📋", kind: "fixed", category: "emprestimo" },
+    { id: "cpfl", label: "Luz (CPFL)", icon: "⚡", kind: "variable", category: "utilidades" },
+    { id: "card", label: "Cartão de crédito", icon: "💳", kind: "variable", category: "cartao" },
   ];
+
+  const BILL_CATEGORIES = [
+    { id: "moradia", label: "Moradia", icon: "🏠" },
+    { id: "emprestimo", label: "Empréstimo / financiamento", icon: "🏦" },
+    { id: "utilidades", label: "Utilidades (luz, água, gás)", icon: "⚡" },
+    { id: "cartao", label: "Cartão", icon: "💳" },
+    { id: "saude", label: "Saúde / plano", icon: "💊" },
+    { id: "educacao", label: "Educação", icon: "📚" },
+    { id: "transporte", label: "Transporte", icon: "🚗" },
+    { id: "assinaturas", label: "Assinaturas", icon: "📱" },
+    { id: "seguros", label: "Seguros", icon: "🛡️" },
+    { id: "outros", label: "Outros", icon: "📦" },
+  ];
+
+  function billCategoryMeta(id) {
+    return BILL_CATEGORIES.find((c) => c.id === id) || BILL_CATEGORIES[BILL_CATEGORIES.length - 1];
+  }
 
   const BILLS_FIXED = BILLS.filter((b) => b.kind === "fixed");
   const BILLS_VARIABLE = BILLS.filter((b) => b.kind === "variable");
 
   function normalizeCustomBill(raw) {
+    const cat = BILL_CATEGORIES.some((c) => c.id === raw.category) ? raw.category : "outros";
     return {
       id: raw.id || uid(),
       label: String(raw.label || "Nova conta").trim() || "Nova conta",
-      icon: raw.icon || "📄",
+      icon: raw.icon || billCategoryMeta(cat).icon || "📄",
       kind: raw.kind === "variable" ? "variable" : "fixed",
+      category: cat,
     };
   }
 
@@ -171,7 +239,7 @@
   }
 
   function emptyBill() {
-    return { amount: 0, due: "", status: "pending", paidDate: "", paidPart: 0 };
+    return { amount: 0, due: "", status: "pending", paidDate: "", paidPart: 0, estimated: false };
   }
 
   function normalizeBill(raw) {
@@ -183,6 +251,7 @@
       status: ["paid", "partial", "pending"].includes(raw.status) ? raw.status : "pending",
       paidDate: typeof raw.paidDate === "string" ? raw.paidDate : "",
       paidPart: Math.max(0, parseMoney(raw.paidPart)),
+      estimated: !!raw.estimated,
     };
   }
 
@@ -546,13 +615,17 @@
     const data = ensureMonth(ym);
     const bills = {};
     getAllBills(data).forEach((b) => {
-      bills[b.id] = normalizeBill({
+      const prev = normalizeBill(data.bills[b.id]);
+      const nb = normalizeBill({
         amount: $(`#bill-${b.id}-amount`)?.value,
         due: $(`#bill-${b.id}-due`)?.value || "",
         status: $(`#bill-${b.id}-status`)?.value || "pending",
         paidDate: $(`#bill-${b.id}-paidDate`)?.value || "",
         paidPart: $(`#bill-${b.id}-paidPart`)?.value,
       });
+      // Estimativa (parcelas do próximo mês) só vale até o usuário mexer no valor.
+      nb.estimated = prev.estimated && nb.amount === prev.amount;
+      bills[b.id] = nb;
     });
     return bills;
   }
@@ -563,6 +636,7 @@
         id: cb.id,
         label: $(`#bill-${cb.id}-label`)?.value ?? cb.label,
         kind: $(`#bill-${cb.id}-kind`)?.value ?? cb.kind,
+        category: $(`#bill-${cb.id}-category`)?.value ?? cb.category,
         icon: cb.icon,
       })
     );
@@ -597,7 +671,7 @@
     const ym = getMonth();
     const data = ensureMonth(ym);
     const id = "c_" + uid();
-    data.customBills.push(normalizeCustomBill({ id, label: "Nova conta", kind: "fixed" }));
+    data.customBills.push(normalizeCustomBill({ id, label: "Nova conta", kind: "fixed", category: "outros" }));
     data.bills[id] = emptyBill();
     saveMonth(ym, data);
     renderBills();
@@ -631,25 +705,36 @@
 
   function billBlockHtml(b, n, isCustom) {
     const overdue = isOverdue(n);
+    const catMeta = billCategoryMeta(b.category || "outros");
     const kindHint = b.kind === "variable"
       ? '<span class="badge badge-partial">Variável</span>'
       : '<span class="badge badge-paid">Fixa</span>';
+    const catHint = `<span class="badge badge-cat">${catMeta.icon} ${catMeta.label}</span>`;
+    const catOptions = BILL_CATEGORIES.map((c) =>
+      `<option value="${c.id}"${(b.category || "outros") === c.id ? " selected" : ""}>${c.icon} ${c.label}</option>`
+    ).join("");
     const titleHtml = isCustom
       ? `<div class="expense-title" style="flex:1">
           <input type="text" id="bill-${b.id}-label" class="bill-label-input" value="${escapeAttr(b.label)}" placeholder="Nome da conta" />
-          <select id="bill-${b.id}-kind" style="margin-top:0.35rem;width:100%">
-            <option value="fixed"${b.kind === "fixed" ? " selected" : ""}>Fixa (todo mês)</option>
-            <option value="variable"${b.kind === "variable" ? " selected" : ""}>Variável</option>
-          </select>
+          <div class="bill-meta-row">
+            <select id="bill-${b.id}-kind">
+              <option value="fixed"${b.kind === "fixed" ? " selected" : ""}>Fixa (todo mês)</option>
+              <option value="variable"${b.kind === "variable" ? " selected" : ""}>Variável</option>
+            </select>
+            <select id="bill-${b.id}-category" aria-label="Categoria da conta">
+              ${catOptions}
+            </select>
+          </div>
         </div>
         <button type="button" class="btn btn-danger btn-sm btn-del-bill" data-id="${b.id}" title="Remover conta">✕</button>`
-      : `<div class="expense-title">${b.label} ${kindHint}</div>`;
+      : `<div class="expense-title">${b.label} ${kindHint} ${catHint}</div>`;
     return `
-      <div class="expense-block${overdue ? " overdue" : ""}" data-bill="${b.id}">
+      <div class="expense-block${overdue ? " overdue" : ""}${n.estimated ? " estimated" : ""}" data-bill="${b.id}">
         <div class="expense-head">
-          <span class="expense-icon">${b.icon}</span>
+          <span class="expense-icon">${isCustom ? catMeta.icon : b.icon}</span>
           ${titleHtml}
         </div>
+        ${n.estimated ? '<p class="hint hint-estimated">Valor estimado das parcelas — fecha sozinho quando você importar a fatura deste mês.</p>' : ""}
         <div class="expense-grid">
           <div class="span2">
             <label class="field-label" for="bill-${b.id}-amount">Valor</label>
@@ -699,15 +784,36 @@
       return `<p class="bills-group-title">${title}</p>${blocks}`;
     };
 
+    const byCat = (list) => {
+      const groups = [];
+      BILL_CATEGORIES.forEach((cat) => {
+        const items = list.filter((b) => (b.category || "outros") === cat.id);
+        if (items.length) groups.push({ cat, items });
+      });
+      const orphan = list.filter((b) => !BILL_CATEGORIES.some((c) => c.id === (b.category || "outros")));
+      if (orphan.length) groups.push({ cat: billCategoryMeta("outros"), items: orphan });
+      return groups;
+    };
+
     const customFixed = getCustomBills(data).filter((b) => b.kind === "fixed");
     const customVariable = getCustomBills(data).filter((b) => b.kind === "variable");
 
-    host.innerHTML =
-      renderGroup(BILLS_FIXED, "Fixas — mesmo valor todo mês") +
-      renderGroup(BILLS_VARIABLE, "Variáveis — mudam (luz, fatura do cartão)") +
-      (customFixed.length ? renderGroup(customFixed, "Suas contas fixas", true) : "") +
-      (customVariable.length ? renderGroup(customVariable, "Suas contas variáveis", true) : "") +
-      '<p class="hint" style="margin-top:0.65rem">Gastos pontuais (Nala, faxineira, cozinheira…) ficam na aba <strong>Gastos</strong>.</p>';
+    let html = "";
+    byCat(BILLS_FIXED).forEach(({ cat, items }) => {
+      html += renderGroup(items, `Fixas · ${cat.icon} ${cat.label}`);
+    });
+    byCat(BILLS_VARIABLE).forEach(({ cat, items }) => {
+      html += renderGroup(items, `Variáveis · ${cat.icon} ${cat.label}`);
+    });
+    byCat(customFixed).forEach(({ cat, items }) => {
+      html += renderGroup(items, `Suas fixas · ${cat.icon} ${cat.label}`, true);
+    });
+    byCat(customVariable).forEach(({ cat, items }) => {
+      html += renderGroup(items, `Suas variáveis · ${cat.icon} ${cat.label}`, true);
+    });
+    html += '<p class="hint" style="margin-top:0.65rem">Gastos pontuais ficam na aba <strong>Gastos</strong>. Use <strong>+ Nova conta</strong> e escolha a categoria.</p>';
+
+    host.innerHTML = html;
 
     host.querySelectorAll("input, select").forEach((el) => {
       el.addEventListener("input", onBillInput);
@@ -1555,16 +1661,68 @@
     });
   }
 
+  /** "Renegociação Itaú" na fatura é o mesmo empréstimo já rastreado na conta fixa "itau". */
+  function isItauRenegLabel(label) {
+    const t = String(label || "");
+    return /renegocia/i.test(t) && /ita[uú]/i.test(t);
+  }
+
   function applyCardStatementToBill(data) {
     if (!data.cardStatement?.items?.length) return data;
-    const Imp = window.MinhasDespesasImport;
-    const total = Imp
-      ? Imp.summarizeByCategory(data.cardStatement.items).total
-      : data.cardStatement.items.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    const items = data.cardStatement.items;
+    const itauItems = items.filter((i) => isItauRenegLabel(i.label));
+    const otherItems = items.filter((i) => !isItauRenegLabel(i.label));
+
     if (!data.bills) data.bills = {};
+
+    const cardTotal = otherItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
     if (!data.bills.card) data.bills.card = emptyBill();
-    data.bills.card.amount = Math.round(total * 100) / 100;
+    data.bills.card = { ...normalizeBill(data.bills.card), amount: Math.round(cardTotal * 100) / 100, estimated: false };
+
+    if (itauItems.length) {
+      const itauTotal = itauItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+      if (!data.bills.itau) data.bills.itau = emptyBill();
+      data.bills.itau = { ...normalizeBill(data.bills.itau), amount: Math.round(itauTotal * 100) / 100 };
+    }
     return data;
+  }
+
+  /**
+   * A fatura já informa quanto das compras parceladas vai cair na PRÓXIMA
+   * fatura ("Saldo total de compras parceladas"). Usa isso pra deixar um
+   * valor estimado no Cartão de crédito do mês seguinte, que se substitui
+   * sozinho quando a fatura real daquele mês for importada (ou se o valor
+   * for editado à mão).
+   *
+   * Fallback: soma as próximas parcelas detectadas nos lançamentos (ex.: 02/06).
+   */
+  function estimateNextCardFromItems(items) {
+    let total = 0;
+    (items || []).forEach((it) => {
+      const m = String(it.label || "").match(/(?:parc(?:ela)?\.?\s*)?(\d{1,2})\s*\/\s*(\d{1,2})\b/i);
+      if (!m) return;
+      const cur = parseInt(m[1], 10);
+      const max = parseInt(m[2], 10);
+      if (!cur || !max || cur >= max) return;
+      // Próxima fatura: mais uma parcela do mesmo valor
+      total += Number(it.amount) || 0;
+    });
+    return Math.round(total * 100) / 100;
+  }
+
+  function applyNextMonthEstimate(ym, parsed) {
+    let est = Number(parsed?.nextInvoiceEstimate) || 0;
+    if (est <= 0) est = estimateNextCardFromItems(parsed?.items);
+    if (est <= 0) return 0;
+    const nm = addMonths(ym, 1);
+    const ndata = ensureMonth(nm);
+    if (!ndata.bills) ndata.bills = {};
+    const cur = normalizeBill(ndata.bills.card);
+    // Não sobrescreve um valor real já lançado (importado ou digitado) pro mês seguinte.
+    if (cur.amount > 0 && !cur.estimated) return 0;
+    ndata.bills.card = { ...cur, amount: Math.round(est * 100) / 100, estimated: true };
+    saveMonth(nm, ndata);
+    return est;
   }
 
   function importCardStatementFile(file) {
@@ -1594,9 +1752,12 @@
         data.cardStatement = parsed;
         applyCardStatementToBill(data);
         saveMonth(ym, data);
+        const nextEst = applyNextMonthEstimate(ym, parsed);
         renderAll();
         if (total > 25000) {
           toast(`Atenção: total R$ ${formatMoney(total)}. Confira se ainda entrou limite/resumo.`);
+        } else if (nextEst > 0) {
+          toast(`${parsed.items.length} lançamentos · R$ ${formatMoney(total)} · próximo mês ~R$ ${formatMoney(nextEst)}`);
         } else {
           toast(`${parsed.items.length} lançamentos · R$ ${formatMoney(total)}`);
         }
@@ -1646,6 +1807,10 @@
     document.querySelectorAll(".nav-btn").forEach((btn) => {
       btn.addEventListener("click", () => switchView(btn.dataset.view));
     });
+
+    $("#btnThemeToggle")?.addEventListener("click", toggleTheme);
+    $("#btnThemeToggleSide")?.addEventListener("click", toggleTheme);
+    updateThemeToggleLabel();
 
     $("#btnAddIncome")?.addEventListener("click", () => {
       const data = ensureMonth(getMonth());

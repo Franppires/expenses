@@ -19,6 +19,7 @@
     { id: "educacao", label: "Educação", icon: "📚" },
     { id: "pets", label: "Pets", icon: "🐾" },
     { id: "servicos", label: "Serviços", icon: "🔧" },
+    { id: "contasfixas", label: "Outras contas fixas", icon: "🧾" },
     { id: "outros", label: "Outros", icon: "📦" },
   ];
 
@@ -37,6 +38,7 @@
     { cat: "educacao", words: ["ESCOLA", "FACULDADE", "UNIVERSIDADE", "CURSO", "UDACITY", "UDEMY", "ALURA", "HOTMART", "LIVRARIA", "SARAIVA"] },
     { cat: "pets", words: ["PETZ", "PETLOVE", "COBASI", "VETERINAR", "PET SHOP", "PETSHOP", "RACAO", "RAÇÃO"] },
     { cat: "servicos", words: ["SALAO", "SALÃO", "BARBEARIA", "ESPETACULO", "MANICURE", "ESTETICA", "ESTÉTICA", "LAVANDERIA", "CORREIOS"] },
+    { cat: "contasfixas", words: ["SEGURO", "CONSORCIO", "CONSÓRCIO", "FINANCIAMENTO", "MENSALIDADE", "PREVIDENCIA", "PREVIDÊNCIA", "ALARME", "MONITORAMENTO", "CONDOMINIO", "CONDOMÍNIO", "RENEGOCIACAO", "RENEGOCIAÇÃO"] },
   ];
 
   function uid() {
@@ -343,6 +345,27 @@
     return list;
   }
 
+  /**
+   * "Saldo total de compras parceladas" — valor das parcelas que já sabemos
+   * que vão cair na PRÓXIMA fatura (a própria fatura documenta isso na seção
+   * "Próxima fatura"). Não é o total geral de parcelamentos em aberto.
+   */
+  function parseNextInvoiceEstimate(text) {
+    const lines = String(text || "")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((l) => l.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const moneyAtEnd = /R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*$/i;
+    for (const line of lines) {
+      const t = normalizeText(line);
+      if (!t.startsWith("SALDO TOTAL DE COMPRAS PARCELADAS")) continue;
+      const m = line.match(moneyAtEnd);
+      if (m) return parseMoneyBR(m[1]);
+    }
+    return 0;
+  }
+
   async function extractPdfText(arrayBuffer) {
     if (typeof pdfjsLib === "undefined") {
       throw new Error("Leitor de PDF não carregou. Recarregue a página.");
@@ -381,6 +404,7 @@
       importedAt: Date.now(),
       fileName: fileName || "fatura.pdf",
       items,
+      nextInvoiceEstimate: parseNextInvoiceEstimate(text),
       rawTextPreview: text.slice(0, 500),
     };
   }
@@ -446,6 +470,7 @@
     parseFile,
     parsePdf,
     parsePdfText,
+    parseNextInvoiceEstimate,
     parseAny,
     summarizeByCategory,
     fetchOpenFinance,
