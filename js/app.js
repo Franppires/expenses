@@ -1487,13 +1487,18 @@
             : "Nenhum lançamento encontrado no arquivo");
           return;
         }
+        const total = parsed.items.reduce((s, i) => s + i.amount, 0);
         const ym = getMonth();
         const data = ensureMonth(ym);
         data.cardStatement = parsed;
         applyCardStatementToBill(data);
         saveMonth(ym, data);
         renderAll();
-        toast(`${parsed.items.length} lançamentos importados · R$ ${formatMoney(parsed.items.reduce((s, i) => s + i.amount, 0))}`);
+        if (total > 25000) {
+          toast(`Atenção: total R$ ${formatMoney(total)}. Confira se ainda entrou limite/resumo.`);
+        } else {
+          toast(`${parsed.items.length} lançamentos · R$ ${formatMoney(total)}`);
+        }
       } catch (e) {
         console.error(e);
         toast(e.message || "Não foi possível ler o arquivo");

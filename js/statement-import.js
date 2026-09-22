@@ -195,6 +195,12 @@
     return items;
   }
 
+  function isJunkLabel(label) {
+    const t = normalizeText(label);
+    return /^(TOTAL|SUBTOTAL|SALDO|RESUMO|FATURA|LIMITE|DISPONIVEL|CREDITO|DEBITO|PAGAMENTO|PAGTO|PAYMENT|IOF|JUROS|MULTA|ENCARGOS|ANTERIOR|ATUAL|VENCIMENTO|CLIENTE|PORTADOR|CARTAO|CPF|CNPJ|AGENCIA|CONTA|BANCO|PAGINA|PAGE)\b/.test(t)
+      || /\b(TOTAL DA FATURA|VALOR TOTAL|VALOR DA FATURA|LIMITE TOTAL|LIMITE DE CREDITO|LIMITE DISPONIVEL|SALDO ANTERIOR|SALDO ATUAL|PAGAMENTO RECEBIDO|PAGAMENTO EFETUADO|CREDITO EM CONTA|LANCAMENTO FUTURO|COMPRAS NACIONAIS|COMPRAS INTERNACIONAIS|RESUMO DA FATURA|TOTAL DE COMPRAS|TOTAL GERAL)\b/.test(t);
+  }
+
   function parsePdfText(text, yearHint) {
     const year = yearHint || String(new Date().getFullYear());
     const lines = String(text || "")
@@ -203,27 +209,32 @@
       .map((l) => l.replace(/\s+/g, " ").trim())
       .filter(Boolean);
 
-    const skip = /^(total|saldo|pagamento|pagto|page|pagina|página|fatura|vencimento|limite|cliente|cartao|cartão|cpf|agencia|agência|resumo|compras nacionais|compras internacionais|lançamentos|extrato)/i;
     const items = [];
     const seen = new Set();
 
-    const moneyAtEnd = /(-?\s*R\$\s*)?(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s*$/;
+    // Valor no fim: 1.234,56 ou 45,90 (não pega "65.000" sem centavos de limite se evitar abaixo)
+    const moneyAtEnd = /(?:R\$\s*)?(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s*[CD]?\s*$/i;
     const dateStart = /^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\s+(.+)$/;
-    const dateStartSpaced = /^(\d{1,2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)[A-Z]*\s+(.+)$/i;
+    const dateStartSpaced = /^(\d{1,2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)[A-ZÁÉÍÓÚ]*\.?\s+(.+)$/i;
     const months = { JAN: "01", FEV: "02", MAR: "03", ABR: "04", MAI: "05", JUN: "06", JUL: "07", AGO: "08", SET: "09", OUT: "10", NOV: "11", DEZ: "12" };
 
+    // Máximo razoável por compra individual (fatura pessoal)
+    const MAX_ITEM = 15000;
+
     lines.forEach((line) => {
-      if (skip.test(line) || line.length < 6) return;
+      if (line.length < 8) return;
+      if (isJunkLabel(line)) return;
+
       const moneyM = line.match(moneyAtEnd);
       if (!moneyM) return;
-      const amount = parseMoneyBR(moneyM[2]);
-      if (amount <= 0 || amount > 500000) return;
+      const amount = parseMoneyBR(moneyM[1]);
+      if (amount <= 0 || amount > MAX_ITEM) return;
 
       const before = line.slice(0, moneyM.index).trim();
-      if (!before || skip.test(before)) return;
+      if (!before || isJunkLabel(before)) return;
 
       let date = "";
-      let label = before;
+      let label = "";
 
       let m = before.match(dateStart);
       if (m) {
@@ -237,11 +248,15 @@
         m = before.match(dateStartSpaced);
         if (m) {
           const d = m[1].padStart(2, "0");
-          const mo = months[m[2].toUpperCase().slice(0, 3)] || "01";
+          const moKey = normalizeText(m[2]).slice(0, 3);
+          const mo = months[moKey] || "01";
           date = `${year}-${mo}-${d}`;
           label = m[3].trim();
         }
       }
+
+      // Sem data = quase sempre resumo/limite/total — ignora
+      if (!date) return;
 
       label = label
         .replace(/^[-–•*]+\s*/, "")
@@ -249,10 +264,11 @@
         .replace(/\s{2,}/g, " ")
         .trim();
 
-      if (label.length < 2) return;
-      if (/pagamento|pagto|payment|total da fatura|valor total/i.test(label)) return;
+      if (label.length < 2 || isJunkLabel(label)) return;
+      // Parcelas tipo "01/03" no meio ok; pula só pagamentos
+      if (/\b(PAGAMENTO|PAGTO|PAYMENT|ESTORNO|CANCELAMENTO)\b/i.test(label)) return;
 
-      const key = `${date}|${normalizeText(label)}|${amount.toFixed(2)}`;
+      const key = `${date}|${normalizeText(label).slice(0, 40)}|${amount.toFixed(2)}`;
       if (seen.has(key)) return;
       seen.add(key);
 
@@ -266,7 +282,45 @@
       });
     });
 
-    return items;
+    return filterInflatedItems(items);
+  }
+
+  /** Remove totais que ainda entraram e outliers óbvios. */
+  function filterInflatedItems(items) {
+    if (!items.length) return items;
+    let list = items.slice();
+
+    // Remove item se for >= 40% do total e bem maior que a mediana
+    const sum = () => list.reduce((s, i) => s + i.amount, 0);
+    const sorted = () => list.map((i) => i.amount).sort((a, b) => a - b);
+
+    for (let pass = 0; pass < 3; pass++) {
+      if (list.length < 2) break;
+      const total = sum();
+      const amts = sorted();
+      const median = amts[Math.floor(amts.length / 2)] || 0;
+      const biggest = list.reduce((a, b) => (a.amount >= b.amount ? a : b));
+      if (
+        biggest.amount >= 5000 &&
+        biggest.amount >= total * 0.35 &&
+        biggest.amount >= median * 8
+      ) {
+        list = list.filter((i) => i.id !== biggest.id);
+        continue;
+      }
+      break;
+    }
+
+    // Se ainda passou de 40 mil, corta itens acima de 8 mil com cara de resumo
+    const total2 = sum();
+    if (total2 > 40000) {
+      list = list.filter((i) => {
+        if (i.amount < 8000) return true;
+        return !/\b(LIMITE|TOTAL|SALDO|CREDITO|FATURA|DISPONIVEL)\b/i.test(i.label);
+      });
+    }
+
+    return list;
   }
 
   async function extractPdfText(arrayBuffer) {
