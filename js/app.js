@@ -1548,6 +1548,13 @@
 
     $("#btnAddBill")?.addEventListener("click", addCustomBill);
 
+    $("#btnGoCardStatement")?.addEventListener("click", () => {
+      switchView("bills");
+      setTimeout(() => {
+        document.getElementById("cardStatementCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
+    });
+
     $("#btnImportStatement")?.addEventListener("click", () => $("#statementFile")?.click());
     $("#statementFile")?.addEventListener("change", (e) => {
       const f = e.target.files?.[0];
