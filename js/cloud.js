@@ -40,7 +40,6 @@
   function prepareLocalData(user) {
     migrateLegacyLocalToUser(user.uid);
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
-    if (window.MinhasDespesasSeedAccount) window.MinhasDespesasSeedAccount(user.email, user.uid);
   }
 
   function openApp(user) {
@@ -222,20 +221,36 @@
     return s;
   }
 
-  /** Nunca apaga edição local sem prova de que a nuvem é mais nova. */
+  function stmtCount(data) {
+    return data?.cardStatement?.items?.length || 0;
+  }
+
+  /** Prefere nuvem (celular) quando ela tem mais conteúdo ou é mais nova. */
   function mergeMonths(localData, cloudData) {
     if (!cloudData) return localData;
     if (!localData) return monthScore(cloudData) > 0 ? cloudData : localData;
 
+    const localScore = monthScore(localData);
+    const cloudScore = monthScore(cloudData);
+    if (cloudScore === 0 && localScore > 0) return localData;
+    if (localScore === 0 && cloudScore > 0) return cloudData;
+
+    if (localData.seeded && !cloudData.seeded && cloudScore > 0) return cloudData;
+    if (cloudData.seeded && !localData.seeded && localScore > 0) return localData;
+
+    const localStmt = stmtCount(localData);
+    const cloudStmt = stmtCount(cloudData);
+    if (cloudStmt > localStmt) return cloudData;
+    if (localStmt > cloudStmt) return localData;
+
     const localTs = Number(localData.savedAt) || 0;
     const cloudTs = Number(cloudData.savedAt) || 0;
-
-    if (localTs && cloudTs) return localTs >= cloudTs ? localData : cloudData;
+    if (cloudTs && localTs && cloudTs !== localTs) {
+      return cloudTs >= localTs ? cloudData : localData;
+    }
+    if (cloudTs && !localTs) return cloudData;
     if (localTs && !cloudTs) return localData;
-    if (!localTs && cloudTs) return cloudData;
-    if (monthScore(cloudData) === 0) return localData;
-    if (monthScore(localData) === 0) return cloudData;
-    return localData;
+    return cloudScore >= localScore ? cloudData : localData;
   }
 
   async function pullFromCloud(uid) {
@@ -266,6 +281,29 @@
           updated++;
         }
       } catch (_) { /* keep local */ }
+    });
+
+    try {
+      const meta = await db.collection("users").doc(uid).collection("meta").doc("settings").get();
+      if (meta.exists && meta.data().patches) {
+        localStorage.setItem("minhas-despesas-patches-done:" + uid, JSON.stringify(meta.data().patches));
+      }
+    } catch (_) { /* ignore */ }
+
+    return { cloudCount: monthsSnap.size, updated };
+  }
+
+  async function pullFromCloudOverwrite(uid) {
+    await ensureAuthReady();
+    const monthsSnap = await db.collection("users").doc(uid).collection("months").get();
+    const prefix = "minhas-despesas-v2:" + uid + ":";
+    let updated = 0;
+
+    monthsSnap.forEach((doc) => {
+      const cloudData = stripCloudMeta(doc.data());
+      if (monthScore(cloudData) <= 0 && !cloudData.cardStatement) return;
+      localStorage.setItem(prefix + doc.id, JSON.stringify(cloudData));
+      updated++;
     });
 
     try {
@@ -343,20 +381,31 @@
   async function runFullSync(user) {
     if (window.MinhasDespesasRecoverLocal) window.MinhasDespesasRecoverLocal(user.uid);
 
-    setSyncStatus("Enviando para nuvem…", true);
-    const uploaded = await withTimeout(flushToCloud(user.uid), 25000);
-
-    setSyncStatus("Baixando outros aparelhos…", true);
+    setSyncStatus("Baixando dados da nuvem…", true);
     const pulled = await withTimeout(pullFromCloud(user.uid), 25000);
 
-    if (pulled.updated > 0) {
-      setSyncStatus("Atualizando…", true);
-      await withTimeout(uploadLocalMonths(user.uid), 25000);
+    if (window.MinhasDespesasSeedAccount) {
+      window.MinhasDespesasSeedAccount(user.email, user.uid);
     }
+
+    setSyncStatus("Enviando para nuvem…", true);
+    const uploaded = await withTimeout(flushToCloud(user.uid), 25000);
 
     setSyncStatus(`Sincronizado · ${uploaded} mês(es)`, true);
     if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
     return { uploaded, pulled };
+  }
+
+  async function useCloudAsSource(user) {
+    setSyncStatus("Trazendo dados do celular…", true);
+    const pulled = await withTimeout(pullFromCloudOverwrite(user.uid), 25000);
+    if (pulled.updated === 0) {
+      setSyncStatus("Nuvem sem dados — nada a trazer", false);
+      return pulled;
+    }
+    setSyncStatus(`Dados da nuvem aplicados · ${pulled.updated} mês(es)`, true);
+    if (window.MinhasDespesasRefresh) window.MinhasDespesasRefresh();
+    return pulled;
   }
 
   function startBackgroundSync(user) {
@@ -513,6 +562,7 @@
     $("#btnLogoutSide")?.addEventListener("click", () => { signOutSafe(); });
     $("#btnRetrySync")?.addEventListener("click", () => retrySync());
     $("#btnRetrySyncData")?.addEventListener("click", () => retrySync());
+    $("#btnUseCloudData")?.addEventListener("click", () => useCloudData());
 
     document.addEventListener("visibilitychange", () => {
       const uid = auth?.currentUser?.uid;
@@ -526,6 +576,23 @@
     $("#authSetup")?.classList.remove("hidden");
     $("#authForm")?.classList.add("hidden");
     setAuthError("");
+  }
+
+  async function useCloudData() {
+    const user = auth?.currentUser;
+    if (!user || !db) {
+      setSyncStatus("Entre na conta primeiro", false);
+      return false;
+    }
+    try {
+      await withTimeout(useCloudAsSource(user), 45000);
+      if (window.MinhasDespesasToast) window.MinhasDespesasToast("Dados do celular aplicados neste aparelho");
+      return true;
+    } catch (e) {
+      console.error(e);
+      reportSyncError(e);
+      return false;
+    }
   }
 
   window.MinhasDespesasCloud = {
@@ -543,6 +610,7 @@
         .catch((e) => reportSyncError(e));
     },
     retrySync,
+    useCloudData,
   };
 
   function start() {

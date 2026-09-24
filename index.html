@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/app.css?v=12" />
+  <link rel="stylesheet" href="css/app.css?v=13" />
 </head>
 <body>
   <!-- LOGIN -->
@@ -211,8 +211,8 @@
       <div class="card">
         <div class="card-head"><h2>Contas do mês</h2><span>Fixas e variáveis</span></div>
         <p class="hint" style="margin:0 0 0.75rem">
-          <strong>Fixas:</strong> empréstimo, das, condomínio, financiamento.
-          <strong>Variáveis:</strong> luz e cartão (mudam todo mês).
+          <strong>Fixas</strong> se repetem todo mês. <strong>Variáveis</strong> mudam (luz, cartão).
+          A categoria fica no campo de cada conta — sem repetir no título.
         </p>
         <div id="billsList"></div>
         <div id="billsTotals"></div>
@@ -273,9 +273,10 @@
       <div class="card">
         <div class="card-head"><h2>Sua conta</h2><span>Nuvem</span></div>
         <p class="hint" id="userEmail">—</p>
-        <p class="hint">Os dados são salvos na nuvem vinculados ao seu login. Ao entrar em outro aparelho, tudo aparece igual.</p>
+        <p class="hint">Os dados reais ficam no celular. No computador, use <strong>Trazer dados do celular</strong> para substituir o que estiver diferente aqui.</p>
         <div class="btn-row">
-          <button type="button" class="btn btn-primary" id="btnRetrySyncData">Sincronizar na nuvem</button>
+          <button type="button" class="btn btn-primary" id="btnUseCloudData">Trazer dados do celular</button>
+          <button type="button" class="btn btn-ghost" id="btnRetrySyncData">Sincronizar na nuvem</button>
           <button type="button" class="btn btn-ghost" id="btnLogoutData">Sair da conta</button>
         </div>
       </div>
@@ -363,11 +364,11 @@ service cloud.firestore {
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="js/firebase-config.js?v=12"></script>
-  <script src="js/statement-import.js?v=12"></script>
-  <script src="js/charts.js?v=12"></script>
-  <script src="js/app.js?v=12"></script>
-  <script src="js/cloud.js?v=12"></script>
-  <script src="js/pwa.js?v=12"></script>
+  <script src="js/firebase-config.js?v=13"></script>
+  <script src="js/statement-import.js?v=13"></script>
+  <script src="js/charts.js?v=13"></script>
+  <script src="js/app.js?v=13"></script>
+  <script src="js/cloud.js?v=13"></script>
+  <script src="js/pwa.js?v=13"></script>
 </body>
 </html>

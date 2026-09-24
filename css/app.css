@@ -1036,6 +1036,11 @@ select:focus-visible,
   margin-top: 0.35rem;
 }
 
+.bill-kind-select {
+  margin-top: 0.4rem;
+  max-width: 12rem;
+}
+
 .expense-block.estimated {
   border-left-color: var(--warn);
   background: linear-gradient(90deg, var(--warn-soft) 0%, var(--surface) 18%);

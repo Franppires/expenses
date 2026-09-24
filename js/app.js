@@ -98,7 +98,10 @@
   }
 
   function getAllBills(data) {
-    return BILLS.concat(getCustomBills(data));
+    return BILLS.concat(getCustomBills(data)).map((b) => ({
+      ...b,
+      category: data?.billCategories?.[b.id] || b.category || "outros",
+    }));
   }
 
   function getAllBillsFixed(data) {
@@ -112,15 +115,22 @@
   function ensureMonthShape(data) {
     if (!data.customBills) data.customBills = [];
     if (!data.bills) data.bills = {};
+    if (!data.billCategories) data.billCategories = {};
     if (!data.cardStatement) data.cardStatement = null;
     BILLS.forEach((b) => {
       if (!data.bills[b.id]) data.bills[b.id] = emptyBill();
+      if (!data.billCategories[b.id]) data.billCategories[b.id] = b.category || "outros";
     });
     data.customBills = data.customBills.map(normalizeCustomBill);
     data.customBills.forEach((cb) => {
       if (!data.bills[cb.id]) data.bills[cb.id] = emptyBill();
+      if (!data.billCategories[cb.id]) data.billCategories[cb.id] = cb.category || "outros";
     });
     return data;
+  }
+
+  function getBillCategory(bill, data) {
+    return data?.billCategories?.[bill.id] || bill.category || "outros";
   }
 
   function emptyCardStatement() {
@@ -289,7 +299,7 @@
   function emptyMonth() {
     const bills = {};
     BILLS.forEach((b) => { bills[b.id] = emptyBill(); });
-    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [], customBills: [], cardStatement: null };
+    return { version: 2, incomes: [emptyIncome("Salário", "salary")], bills, extras: [], customBills: [], billCategories: {}, cardStatement: null };
   }
 
   function migrateLegacy(ym, raw) {
@@ -393,8 +403,9 @@
       if (localStorage.getItem(userKey)) return;
       let preset = JSON.parse(JSON.stringify(PRESETS[ym]));
       preset.version = 2;
+      preset.seeded = true;
       preset = applyMonthPatch(ym, preset);
-      saveMonth(ym, preset, uid);
+      saveMonth(ym, preset, uid, { localOnly: true, keepSeeded: true });
       seeded++;
     });
     currentUserId = prevUid;
@@ -422,12 +433,14 @@
     return null;
   }
 
-  function saveMonth(ym, data, explicitUid) {
-    const payload = { ...data, version: 2, savedAt: Date.now() };
+  function saveMonth(ym, data, explicitUid, opts) {
+    const keepTs = opts?.keepSavedAt && data.savedAt;
+    const payload = { ...data, version: 2, savedAt: keepTs ? data.savedAt : Date.now() };
+    if (!opts?.keepSeeded) delete payload.seeded;
     const uid = explicitUid !== undefined ? explicitUid : currentUserId;
     const scope = uid ? uid + ":" : "";
     localStorage.setItem(STORAGE_PREFIX_V2 + scope + ym, JSON.stringify(payload));
-    if (uid === currentUserId) cloudSaveMonth(ym, payload);
+    if (!opts?.localOnly && uid === currentUserId) cloudSaveMonth(ym, payload);
   }
 
   function getPatchesDone() {
@@ -508,6 +521,7 @@
     const prev = ensureMonthShape(migrateLegacy("", prevRaw));
     const data = emptyMonth();
     data.customBills = getCustomBills(prev);
+    data.billCategories = { ...(prev.billCategories || {}) };
     getAllBills(prev).forEach((b) => {
       if (!data.bills[b.id]) data.bills[b.id] = emptyBill();
       const prevBill = normalizeBill(prev.bills[b.id]);
@@ -542,7 +556,8 @@
     if (PRESETS[ym]) {
       data = JSON.parse(JSON.stringify(PRESETS[ym]));
       data.version = 2;
-      saveMonth(ym, data);
+      data.seeded = true;
+      saveMonth(ym, data, undefined, { keepSeeded: true });
       return data;
     }
     const prev = findPreviousMonthData(ym);
@@ -614,6 +629,7 @@
     const ym = getMonth();
     const data = ensureMonth(ym);
     const bills = {};
+    const cats = { ...(data.billCategories || {}) };
     getAllBills(data).forEach((b) => {
       const prev = normalizeBill(data.bills[b.id]);
       const nb = normalizeBill({
@@ -626,8 +642,10 @@
       // Estimativa (parcelas do próximo mês) só vale até o usuário mexer no valor.
       nb.estimated = prev.estimated && nb.amount === prev.amount;
       bills[b.id] = nb;
+      const catSel = $(`#bill-${b.id}-category`);
+      if (catSel?.value) cats[b.id] = catSel.value;
     });
-    return bills;
+    return { bills, billCategories: cats };
   }
 
   function readCustomBillsFromDom(data) {
@@ -645,7 +663,9 @@
   function saveBillsFromDom() {
     const ym = getMonth();
     const data = ensureMonth(ym);
-    data.bills = readBillsFromDom();
+    const fromDom = readBillsFromDom();
+    data.bills = fromDom.bills;
+    data.billCategories = fromDom.billCategories;
     if (getCustomBills(data).length) {
       data.customBills = readCustomBillsFromDom(data);
     }
@@ -673,6 +693,7 @@
     const id = "c_" + uid();
     data.customBills.push(normalizeCustomBill({ id, label: "Nova conta", kind: "fixed", category: "outros" }));
     data.bills[id] = emptyBill();
+    data.billCategories = { ...(data.billCategories || {}), [id]: "outros" };
     saveMonth(ym, data);
     renderBills();
     renderHome();
@@ -685,6 +706,7 @@
     const data = ensureMonth(ym);
     data.customBills = getCustomBills(data).filter((b) => b.id !== id);
     delete data.bills[id];
+    if (data.billCategories) delete data.billCategories[id];
     saveMonth(ym, data);
     renderAll();
     toast("Conta removida");
@@ -703,31 +725,23 @@
     return "💰";
   }
 
-  function billBlockHtml(b, n, isCustom) {
+  function billBlockHtml(b, n, isCustom, data) {
     const overdue = isOverdue(n);
-    const catMeta = billCategoryMeta(b.category || "outros");
-    const kindHint = b.kind === "variable"
-      ? '<span class="badge badge-partial">Variável</span>'
-      : '<span class="badge badge-paid">Fixa</span>';
-    const catHint = `<span class="badge badge-cat">${catMeta.icon} ${catMeta.label}</span>`;
+    const catId = getBillCategory(b, data);
+    const catMeta = billCategoryMeta(catId);
     const catOptions = BILL_CATEGORIES.map((c) =>
-      `<option value="${c.id}"${(b.category || "outros") === c.id ? " selected" : ""}>${c.icon} ${c.label}</option>`
+      `<option value="${c.id}"${catId === c.id ? " selected" : ""}>${c.icon} ${c.label}</option>`
     ).join("");
     const titleHtml = isCustom
       ? `<div class="expense-title" style="flex:1">
           <input type="text" id="bill-${b.id}-label" class="bill-label-input" value="${escapeAttr(b.label)}" placeholder="Nome da conta" />
-          <div class="bill-meta-row">
-            <select id="bill-${b.id}-kind">
-              <option value="fixed"${b.kind === "fixed" ? " selected" : ""}>Fixa (todo mês)</option>
-              <option value="variable"${b.kind === "variable" ? " selected" : ""}>Variável</option>
-            </select>
-            <select id="bill-${b.id}-category" aria-label="Categoria da conta">
-              ${catOptions}
-            </select>
-          </div>
+          <select id="bill-${b.id}-kind" class="bill-kind-select" aria-label="Tipo da conta">
+            <option value="fixed"${b.kind === "fixed" ? " selected" : ""}>Fixa (todo mês)</option>
+            <option value="variable"${b.kind === "variable" ? " selected" : ""}>Variável</option>
+          </select>
         </div>
         <button type="button" class="btn btn-danger btn-sm btn-del-bill" data-id="${b.id}" title="Remover conta">✕</button>`
-      : `<div class="expense-title">${b.label} ${kindHint} ${catHint}</div>`;
+      : `<div class="expense-title">${b.label}</div>`;
     return `
       <div class="expense-block${overdue ? " overdue" : ""}${n.estimated ? " estimated" : ""}" data-bill="${b.id}">
         <div class="expense-head">
@@ -754,6 +768,12 @@
               <option value="partial"${n.status === "partial" ? " selected" : ""}>Parcial</option>
             </select>
           </div>
+          <div class="span2">
+            <label class="field-label" for="bill-${b.id}-category">Categoria</label>
+            <select id="bill-${b.id}-category" aria-label="Categoria da conta">
+              ${catOptions}
+            </select>
+          </div>
           <div class="subfields sub-paid${n.status === "paid" ? " visible" : ""}">
             <div>
               <label class="field-label" for="bill-${b.id}-paidDate">Pago em</label>
@@ -778,40 +798,17 @@
     const host = $("#billsList");
     if (!host) return;
 
-    const renderGroup = (list, title, isCustom) => {
+    const isCustomBill = (b) => getCustomBills(data).some((c) => c.id === b.id);
+    const renderGroup = (list, title) => {
       if (!list.length) return "";
-      const blocks = list.map((b) => billBlockHtml(b, normalizeBill(data.bills[b.id]), isCustom)).join("");
+      const blocks = list.map((b) => billBlockHtml(b, normalizeBill(data.bills[b.id]), isCustomBill(b), data)).join("");
       return `<p class="bills-group-title">${title}</p>${blocks}`;
     };
 
-    const byCat = (list) => {
-      const groups = [];
-      BILL_CATEGORIES.forEach((cat) => {
-        const items = list.filter((b) => (b.category || "outros") === cat.id);
-        if (items.length) groups.push({ cat, items });
-      });
-      const orphan = list.filter((b) => !BILL_CATEGORIES.some((c) => c.id === (b.category || "outros")));
-      if (orphan.length) groups.push({ cat: billCategoryMeta("outros"), items: orphan });
-      return groups;
-    };
-
-    const customFixed = getCustomBills(data).filter((b) => b.kind === "fixed");
-    const customVariable = getCustomBills(data).filter((b) => b.kind === "variable");
-
     let html = "";
-    byCat(BILLS_FIXED).forEach(({ cat, items }) => {
-      html += renderGroup(items, `Fixas · ${cat.icon} ${cat.label}`);
-    });
-    byCat(BILLS_VARIABLE).forEach(({ cat, items }) => {
-      html += renderGroup(items, `Variáveis · ${cat.icon} ${cat.label}`);
-    });
-    byCat(customFixed).forEach(({ cat, items }) => {
-      html += renderGroup(items, `Suas fixas · ${cat.icon} ${cat.label}`, true);
-    });
-    byCat(customVariable).forEach(({ cat, items }) => {
-      html += renderGroup(items, `Suas variáveis · ${cat.icon} ${cat.label}`, true);
-    });
-    html += '<p class="hint" style="margin-top:0.65rem">Gastos pontuais ficam na aba <strong>Gastos</strong>. Use <strong>+ Nova conta</strong> e escolha a categoria.</p>';
+    html += renderGroup(getAllBillsFixed(data), "Contas fixas");
+    html += renderGroup(getAllBillsVariable(data), "Contas variáveis");
+    html += '<p class="hint" style="margin-top:0.65rem">Gastos pontuais ficam na aba <strong>Gastos</strong>. Use <strong>+ Nova conta</strong> se quiser uma conta recorrente nova.</p>';
 
     host.innerHTML = html;
 
@@ -1381,7 +1378,15 @@
       ? [normalizeExtra({ id: "proj-extras", label: "Gastos variáveis (projeção)", amount: extrasAmt, status: "pending" })]
       : [];
 
-    saveMonth(m, { version: 2, incomes, bills, extras, customBills: prev.customBills || [] });
+    saveMonth(m, {
+      version: 2,
+      incomes,
+      bills,
+      extras,
+      customBills: prev.customBills || [],
+      billCategories: prev.billCategories || {},
+      cardStatement: prev.cardStatement || null,
+    });
     projOpenMonth = null;
     const row = document.querySelector(`[data-proj-expand="${m}"]`);
     if (row) row.setAttribute("hidden", "");
