@@ -1329,6 +1329,56 @@ select:focus-visible,
   font-size: 0.875rem;
 }
 
+.stmt-pay-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0 0 0.85rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.stmt-pay-totals strong { color: var(--text); }
+
+.stmt-pay-group {
+  margin-bottom: 0.85rem;
+}
+
+.stmt-pay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  padding: 0.4rem 0.35rem;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+}
+
+.stmt-pay-head strong {
+  font-size: 0.8125rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+.stmt-pay-head:hover { background: var(--surface); }
+.stmt-pay-head.active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand-dark);
+}
+
 .stmt-cat-row {
   display: grid;
   grid-template-columns: 7.5rem 1fr auto;

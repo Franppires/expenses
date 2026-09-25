@@ -1212,22 +1212,34 @@
 
     const catHost = $("#chartCategory");
     if (catHost) {
-      const items = data.cardStatement?.items || [];
+      const items = (data.cardStatement?.items || []).filter((it) => !isItauRenegLabel(it.label));
       if (items.length && Imp) {
-        const { byCategory } = Imp.summarizeByCategory(items);
         const catColors = Charts.CAT_COLORS || [];
-        const rows = Imp.CATEGORIES
-          .map((c, idx) => ({
-            label: c.label,
-            icon: c.icon,
-            amount: byCategory[c.id] || 0,
-            colorVar: catColors.length ? catColors[idx % catColors.length] : undefined,
-          }))
-          .filter((r) => r.amount > 0)
-          .sort((a, b) => b.amount - a.amount);
-        Charts.renderBarList(catHost, rows, { emptyMessage: "Sem gastos categorizados." });
+        const rowsFor = (list) => {
+          const { byCategory } = Imp.summarizeByCategory(list);
+          return Imp.CATEGORIES
+            .map((c, idx) => ({
+              label: c.label,
+              icon: c.icon,
+              amount: byCategory[c.id] || 0,
+              colorVar: catColors.length ? catColors[idx % catColors.length] : undefined,
+            }))
+            .filter((r) => r.amount > 0)
+            .sort((a, b) => b.amount - a.amount);
+        };
+        const cash = items.filter((it) => stmtPayType(it) === "cash");
+        const inst = items.filter((it) => stmtPayType(it) === "installment");
+        const cashTotal = cash.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+        const instTotal = inst.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+        catHost.innerHTML = `
+          <p class="bills-group-title">À vista · R$ ${formatMoney(cashTotal)}</p>
+          <div id="chartCatCash"></div>
+          <p class="bills-group-title">Parcelado · R$ ${formatMoney(instTotal)}</p>
+          <div id="chartCatInst"></div>`;
+        Charts.renderBarList($("#chartCatCash"), rowsFor(cash), { emptyMessage: "Nenhuma compra à vista." });
+        Charts.renderBarList($("#chartCatInst"), rowsFor(inst), { emptyMessage: "Nenhuma compra parcelada." });
       } else {
-        Charts.renderBarList(catHost, [], { emptyMessage: "Importe a fatura do cartão (aba Contas) para ver por categoria." });
+        Charts.renderBarList(catHost, [], { emptyMessage: "Importe a fatura do cartão (aba Contas) para ver à vista e parcelado." });
       }
     }
 
@@ -1552,6 +1564,77 @@
 
   let cardStatementFilter = null;
 
+  function stmtPayType(item) {
+    const Imp = window.MinhasDespesasImport;
+    if (Imp?.itemPayType) return Imp.itemPayType(item);
+    return /\b\d{1,2}\s*\/\s*\d{1,2}\b/.test(String(item?.label || "")) ? "installment" : "cash";
+  }
+
+  function stmtInstallment(item) {
+    const Imp = window.MinhasDespesasImport;
+    if (item?.installment?.total >= 2) return item.installment;
+    return Imp?.parseInstallment ? Imp.parseInstallment(item?.label) : null;
+  }
+
+  function stmtFilterKey(pay, cat) {
+    return `${pay || ""}:${cat || ""}`;
+  }
+
+  function renderStmtCatGroup(items, pay, Imp) {
+    const { byCategory, total } = Imp
+      ? Imp.summarizeByCategory(items)
+      : { byCategory: {}, total: items.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
+    const cats = Imp ? Imp.CATEGORIES : [];
+    const title = pay === "installment" ? "Parcelado" : "À vista";
+    const icon = pay === "installment" ? "📑" : "💵";
+    const groupActive = cardStatementFilter && cardStatementFilter.pay === pay && !cardStatementFilter.cat;
+    const rows = cats
+      .filter((c) => (byCategory[c.id] || 0) > 0)
+      .sort((a, b) => (byCategory[b.id] || 0) - (byCategory[a.id] || 0))
+      .map((c) => {
+        const amt = byCategory[c.id] || 0;
+        const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
+        const active = cardStatementFilter && cardStatementFilter.pay === pay && cardStatementFilter.cat === c.id;
+        return `<button type="button" class="stmt-cat-row${active ? " active" : ""}" data-pay-filter="${pay}" data-cat-filter="${c.id}">
+          <span class="stmt-cat-label">${c.icon} ${c.label}</span>
+          <span class="stmt-cat-bar"><span style="width:${pct}%"></span></span>
+          <span class="stmt-cat-amt">R$ ${formatMoney(amt)}</span>
+        </button>`;
+      })
+      .join("");
+    if (!items.length) return "";
+    return `
+      <div class="stmt-pay-group">
+        <button type="button" class="stmt-pay-head${groupActive ? " active" : ""}" data-pay-filter="${pay}" data-cat-filter="">
+          <span>${icon} ${title}</span>
+          <strong>R$ ${formatMoney(total)}</strong>
+        </button>
+        ${rows || '<p class="hint">Nenhum lançamento neste grupo.</p>'}
+      </div>`;
+  }
+
+  function renderStmtItem(it, Imp) {
+    const isItau = isItauRenegLabel(it.label);
+    const meta = Imp ? Imp.categoryMeta(it.category) : { icon: "📦", label: it.category || "Outros", id: "outros" };
+    const inst = stmtInstallment(it);
+    const instBadge = inst && inst.total >= 2
+      ? `<span class="badge badge-cat">${String(inst.current).padStart(2, "0")}/${String(inst.total).padStart(2, "0")}</span>`
+      : (stmtPayType(it) === "installment" ? '<span class="badge badge-cat">Parcelado</span>' : "");
+    return `<div class="tx-item${isItau ? " tx-item--itau" : ""}" data-stmt-item="${it.id}">
+      <span class="tx-icon">${isItau ? "🏦" : meta.icon}</span>
+      <div class="tx-body">
+        <div class="tx-title">${escapeAttr(it.label)}${isItau ? ' <span class="badge badge-paid">→ Empréstimo Itaú</span>' : ""} ${instBadge}</div>
+        <div class="tx-meta">${formatDateBRShort(it.date)} · ${isItau ? "Empréstimo" : escapeAttr(meta.label)}</div>
+        ${isItau ? "" : `<select class="stmt-cat-select" data-id="${it.id}" aria-label="Categoria">
+          ${(Imp ? Imp.CATEGORIES : []).map((c) =>
+            `<option value="${c.id}"${c.id === it.category ? " selected" : ""}>${c.icon} ${c.label}</option>`
+          ).join("")}
+        </select>`}
+      </div>
+      <span class="tx-amount expense">R$ ${formatMoney(it.amount)}</span>
+    </div>`;
+  }
+
   function renderCardStatement() {
     const data = ensureMonth(getMonth());
     const stmt = data.cardStatement;
@@ -1573,87 +1656,88 @@
     clearBtn?.classList.remove("hidden");
     const itauItems = stmt.items.filter((it) => isItauRenegLabel(it.label));
     const cardItems = stmt.items.filter((it) => !isItauRenegLabel(it.label));
-    const { byCategory, total } = Imp
-      ? Imp.summarizeByCategory(cardItems)
-      : { byCategory: {}, total: cardItems.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
+    const cashItems = cardItems.filter((it) => stmtPayType(it) === "cash");
+    const instItems = cardItems.filter((it) => stmtPayType(it) === "installment");
+    const cashTotal = cashItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    const instTotal = instItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    const total = cashTotal + instTotal;
     const itauTotal = itauItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
 
-    if (cardStatementFilter && !(byCategory[cardStatementFilter] > 0)) cardStatementFilter = null;
-
-    const cats = Imp ? Imp.CATEGORIES : [];
-    const catRows = cats
-      .filter((c) => (byCategory[c.id] || 0) > 0)
-      .sort((a, b) => (byCategory[b.id] || 0) - (byCategory[a.id] || 0))
-      .map((c) => {
-        const amt = byCategory[c.id] || 0;
-        const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
-        const active = cardStatementFilter === c.id;
-        return `<button type="button" class="stmt-cat-row${active ? " active" : ""}" data-cat-filter="${c.id}">
-          <span class="stmt-cat-label">${c.icon} ${c.label}</span>
-          <span class="stmt-cat-bar"><span style="width:${pct}%"></span></span>
-          <span class="stmt-cat-amt">R$ ${formatMoney(amt)}</span>
-        </button>`;
-      })
-      .join("");
+    if (cardStatementFilter) {
+      const pool = cardStatementFilter.pay === "installment" ? instItems : cashItems;
+      const { byCategory } = Imp ? Imp.summarizeByCategory(pool) : { byCategory: {} };
+      if (cardStatementFilter.cat && !(byCategory[cardStatementFilter.cat] > 0)) cardStatementFilter = null;
+    }
 
     summary.classList.remove("hidden");
     summary.innerHTML = `
       <div class="stmt-cat-head">
         <div>
-          <strong>${stmt.items.length} lançamento(s)</strong>
+          <strong>${cardItems.length} lançamento(s) no cartão</strong>
           <span class="hint"> · ${escapeAttr(stmt.fileName || stmt.source || "import")}</span>
         </div>
         <strong class="amt-neg">R$ ${formatMoney(total)}</strong>
       </div>
-      ${catRows}
+      <div class="stmt-pay-totals">
+        <span>💵 À vista <strong>R$ ${formatMoney(cashTotal)}</strong></span>
+        <span>📑 Parcelado <strong>R$ ${formatMoney(instTotal)}</strong></span>
+      </div>
+      ${renderStmtCatGroup(cashItems, "cash", Imp)}
+      ${renderStmtCatGroup(instItems, "installment", Imp)}
       <p class="hint" style="margin-top:0.65rem">
-        Toque numa categoria para filtrar.
-        Cartão: <strong>R$ ${formatMoney(total)}</strong>
-        ${itauTotal > 0 ? ` · Reneg. Itaú (${itauItems.length} parc.): <strong>R$ ${formatMoney(itauTotal)}</strong> → conta Empréstimo` : ""}
+        Toque em <strong>À vista</strong> ou <strong>Parcelado</strong> — ou numa categoria — para filtrar.
+        ${itauTotal > 0 ? `Reneg. Itaú (${itauItems.length} parc.): <strong>R$ ${formatMoney(itauTotal)}</strong> → conta Empréstimo.` : ""}
       </p>
     `;
 
-    summary.querySelectorAll("[data-cat-filter]").forEach((btn) => {
+    summary.querySelectorAll("[data-pay-filter]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const catId = btn.dataset.catFilter;
-        cardStatementFilter = cardStatementFilter === catId ? null : catId;
+        const pay = btn.dataset.payFilter;
+        const cat = btn.dataset.catFilter || "";
+        const next = { pay, cat: cat || null };
+        const same = cardStatementFilter
+          && stmtFilterKey(cardStatementFilter.pay, cardStatementFilter.cat) === stmtFilterKey(next.pay, next.cat);
+        cardStatementFilter = same ? null : next;
         renderCardStatement();
       });
     });
 
-    const filteredItems = cardStatementFilter
-      ? stmt.items.filter((it) => it.category === cardStatementFilter)
-      : stmt.items;
+    const filteredItems = stmt.items.filter((it) => {
+      if (!cardStatementFilter) return true;
+      if (isItauRenegLabel(it.label) && cardStatementFilter.pay === "cash") return false;
+      if (cardStatementFilter.pay && stmtPayType(it) !== cardStatementFilter.pay && !isItauRenegLabel(it.label)) return false;
+      if (cardStatementFilter.cat && it.category !== cardStatementFilter.cat) return false;
+      return true;
+    });
+
+    const filterLabel = (() => {
+      if (!cardStatementFilter) return "";
+      const payLabel = cardStatementFilter.pay === "installment" ? "Parcelado" : "À vista";
+      const catLabel = cardStatementFilter.cat && Imp ? Imp.categoryMeta(cardStatementFilter.cat).label : "";
+      return catLabel ? `${payLabel} · ${catLabel}` : payLabel;
+    })();
 
     const filterNote = cardStatementFilter
       ? `<div class="stmt-filter-note">
-          Filtrando por <strong>${escapeAttr(Imp ? Imp.categoryMeta(cardStatementFilter).label : cardStatementFilter)}</strong>
+          Filtrando <strong>${escapeAttr(filterLabel)}</strong>
           (${filteredItems.length} de ${stmt.items.length})
           <button type="button" class="btn btn-ghost btn-sm" id="btnClearCatFilter">Limpar filtro</button>
         </div>`
       : "";
 
-    list.innerHTML = filterNote + filteredItems
-      .slice()
-      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-      .map((it) => {
-        const isItau = isItauRenegLabel(it.label);
-        const meta = Imp ? Imp.categoryMeta(it.category) : { icon: "📦", label: it.category || "Outros", id: "outros" };
-        return `<div class="tx-item${isItau ? " tx-item--itau" : ""}" data-stmt-item="${it.id}">
-          <span class="tx-icon">${isItau ? "🏦" : meta.icon}</span>
-          <div class="tx-body">
-            <div class="tx-title">${escapeAttr(it.label)}${isItau ? ' <span class="badge badge-paid">→ Empréstimo Itaú</span>' : ""}</div>
-            <div class="tx-meta">${formatDateBRShort(it.date)} · ${isItau ? "Empréstimo" : escapeAttr(meta.label)}</div>
-            ${isItau ? "" : `<select class="stmt-cat-select" data-id="${it.id}" aria-label="Categoria">
-              ${(Imp ? Imp.CATEGORIES : []).map((c) =>
-                `<option value="${c.id}"${c.id === it.category ? " selected" : ""}>${c.icon} ${c.label}</option>`
-              ).join("")}
-            </select>`}
-          </div>
-          <span class="tx-amount expense">R$ ${formatMoney(it.amount)}</span>
-        </div>`;
-      })
-      .join("") || (cardStatementFilter ? '<p class="empty-state">Nenhum lançamento nessa categoria.</p>' : "");
+    const visibleCash = filteredItems.filter((it) => !isItauRenegLabel(it.label) && stmtPayType(it) === "cash");
+    const visibleInst = filteredItems.filter((it) => isItauRenegLabel(it.label) || stmtPayType(it) === "installment");
+    const sortItems = (arr) => arr.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+    const listGroup = (title, items) => {
+      if (!items.length) return "";
+      return `<p class="bills-group-title">${title}</p>${sortItems(items).map((it) => renderStmtItem(it, Imp)).join("")}`;
+    };
+
+    const body = listGroup("À vista", visibleCash) + listGroup("Parcelado", visibleInst);
+    list.innerHTML = filterNote + (body || (cardStatementFilter
+      ? '<p class="empty-state">Nenhum lançamento nesse filtro.</p>'
+      : ""));
 
     $("#btnClearCatFilter")?.addEventListener("click", () => {
       cardStatementFilter = null;

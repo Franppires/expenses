@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/app.css?v=14" />
+  <link rel="stylesheet" href="css/app.css?v=15" />
 </head>
 <body>
   <!-- LOGIN -->
@@ -162,7 +162,7 @@
       </div>
       <div class="card">
         <div class="card-head"><h2>Fatura do cartão</h2><span>Novo</span></div>
-        <p class="hint" style="margin:0 0 0.65rem">Importe o PDF/CSV/OFX do banco e veja os gastos por categoria.</p>
+        <p class="hint" style="margin:0 0 0.65rem">Importe o PDF/CSV/OFX do banco e veja à vista e parcelado, por categoria.</p>
         <button type="button" class="btn btn-primary" id="btnGoCardStatement" style="width:100%">Abrir fatura do cartão</button>
       </div>
     </section>
@@ -197,7 +197,7 @@
       <div class="card" id="cardStatementCard">
         <div class="card-head"><h2>Fatura do cartão</h2><span>Importar</span></div>
         <p class="hint" style="margin:0 0 0.75rem">
-          Importe a fatura em <strong>PDF</strong>, CSV ou OFX. O app lê os lançamentos, categoriza e atualiza o <strong>Cartão de crédito</strong>.
+          Importe a fatura em <strong>PDF</strong>, CSV ou OFX. Os gastos aparecem como no banco: <strong>à vista</strong> e <strong>parcelado</strong>, cada um com suas categorias.
         </p>
         <div class="btn-row">
           <button type="button" class="btn btn-primary" id="btnImportStatement">Importar fatura (PDF/CSV/OFX)</button>
@@ -364,11 +364,11 @@ service cloud.firestore {
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="js/firebase-config.js?v=14"></script>
-  <script src="js/statement-import.js?v=14"></script>
-  <script src="js/charts.js?v=14"></script>
-  <script src="js/app.js?v=14"></script>
-  <script src="js/cloud.js?v=14"></script>
-  <script src="js/pwa.js?v=14"></script>
+  <script src="js/firebase-config.js?v=15"></script>
+  <script src="js/statement-import.js?v=15"></script>
+  <script src="js/charts.js?v=15"></script>
+  <script src="js/app.js?v=15"></script>
+  <script src="js/cloud.js?v=15"></script>
+  <script src="js/pwa.js?v=15"></script>
 </body>
 </html>

@@ -91,6 +91,41 @@
     return "outros";
   }
 
+  /** Detecta 03/10, 3/12, "2 de 6" — ignora datas tipo 24/09. */
+  function parseInstallment(label) {
+    const s = String(label || "");
+    let m = s.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
+    if (!m) m = s.match(/\b(\d{1,2})\s*(?:DE|OF)\s*(\d{1,2})\b/i);
+    if (m) {
+      const current = parseInt(m[1], 10);
+      const total = parseInt(m[2], 10);
+      if (current >= 1 && total >= 2 && current <= total && total <= 84) {
+        return { current, total };
+      }
+    }
+    if (/\bPARCEL(?:A|ADO|AMENTO)?S?\b/i.test(s) || /\bPARC\.?\b/i.test(s)) {
+      return { current: 0, total: 0 };
+    }
+    return null;
+  }
+
+  function itemPayType(item) {
+    if (item?.payType === "installment" || item?.payType === "cash") return item.payType;
+    return parseInstallment(item?.label) ? "installment" : "cash";
+  }
+
+  function detectSectionPayType(line) {
+    const t = normalizeText(line);
+    if (/SALDO TOTAL DE COMPRAS PARCEL|SIMULACAO DE PARCEL|PROXIMA FATURA/.test(t)) return null;
+    if (/COMPRAS?\s+A\s+VISTA|GASTOS?\s+A\s+VISTA|LANCAMENTOS?\s+A\s+VISTA|TRANSACOES?\s+A\s+VISTA|^A\s+VISTA$/.test(t)) {
+      return "cash";
+    }
+    if (/COMPRAS?\s+PARCEL|PARCELAMENTOS|DEMAIS LANCAMENTOS PARCEL|^PARCELAD/.test(t)) {
+      return "installment";
+    }
+    return null;
+  }
+
   function categoryMeta(id) {
     return CATEGORIES.find((c) => c.id === id) || CATEGORIES[CATEGORIES.length - 1];
   }
@@ -163,12 +198,15 @@
       const amount = parseMoneyBR(cells[cols.amount] ?? cells[cells.length - 1]);
       if (!label || amount <= 0) continue;
       if (/^(total|saldo|pagamento|pagto)/i.test(label)) continue;
+      const inst = parseInstallment(label);
       items.push({
         id: uid(),
         date: date || "",
         label,
         amount,
         category: categorize(label),
+        payType: inst ? "installment" : "cash",
+        installment: inst,
         raw: cells.join(" | "),
       });
     }
@@ -189,12 +227,15 @@
       const date = parseDateFlex(dt.slice(0, 8));
       if (amount <= 0) return;
       if (/pagamento|pagto|payment/i.test(label)) return;
+      const inst = parseInstallment(label);
       items.push({
         id: uid(),
         date,
         label,
         amount,
         category: categorize(label),
+        payType: inst ? "installment" : "cash",
+        installment: inst,
         raw: label,
       });
     });
@@ -233,11 +274,15 @@
     const MAX_ITEM = 15000;
 
     let inSection = false;
+    let sectionPayType = "";
 
     lines.forEach((line) => {
       if (SECTION_START.test(line)) { inSection = true; return; }
-      if (SECTION_END.test(line)) { inSection = false; return; }
+      if (SECTION_END.test(line)) { inSection = false; sectionPayType = ""; return; }
       if (!inSection) return;
+
+      const sectionType = detectSectionPayType(line);
+      if (sectionType) { sectionPayType = sectionType; return; }
 
       if (line.length < 8) return;
       if (isJunkLabel(line)) return;
@@ -294,12 +339,16 @@
       if (seen.has(key)) return;
       seen.add(key);
 
+      const inst = parseInstallment(label);
+      const payType = inst ? "installment" : (sectionPayType || "cash");
       items.push({
         id: uid(),
         date,
         label,
         amount,
         category: categorize(label),
+        payType,
+        installment: inst,
         raw: line,
       });
     });
@@ -467,6 +516,8 @@
     CATEGORIES,
     categoryMeta,
     categorize,
+    parseInstallment,
+    itemPayType,
     parseFile,
     parsePdf,
     parsePdfText,
