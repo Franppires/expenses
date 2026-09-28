@@ -1231,13 +1231,24 @@
         const inst = items.filter((it) => stmtPayType(it) === "installment");
         const cashTotal = cash.reduce((s, i) => s + (Number(i.amount) || 0), 0);
         const instTotal = inst.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+        if (homePayTab === "cash" && !cash.length && inst.length) homePayTab = "installment";
+        if (homePayTab === "installment" && !inst.length && cash.length) homePayTab = "cash";
+        const activeList = homePayTab === "installment" ? inst : cash;
         catHost.innerHTML = `
-          <p class="bills-group-title">À vista · R$ ${formatMoney(cashTotal)}</p>
-          <div id="chartCatCash"></div>
-          <p class="bills-group-title">Parcelado · R$ ${formatMoney(instTotal)}</p>
-          <div id="chartCatInst"></div>`;
-        Charts.renderBarList($("#chartCatCash"), rowsFor(cash), { emptyMessage: "Nenhuma compra à vista." });
-        Charts.renderBarList($("#chartCatInst"), rowsFor(inst), { emptyMessage: "Nenhuma compra parcelada." });
+          ${installmentOutlookHtml(items, data.cardStatement?.nextInvoiceEstimate)}
+          ${payToggleHtml(homePayTab, cashTotal, instTotal)}
+          <div id="chartCatBars"></div>`;
+        catHost.querySelectorAll("[data-pay-tab]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            homePayTab = btn.dataset.payTab === "installment" ? "installment" : "cash";
+            renderHomeCharts(data, s, ym);
+          });
+        });
+        Charts.renderBarList(
+          $("#chartCatBars"),
+          rowsFor(activeList),
+          { emptyMessage: homePayTab === "installment" ? "Nenhuma compra parcelada." : "Nenhuma compra à vista." }
+        );
       } else {
         Charts.renderBarList(catHost, [], { emptyMessage: "Importe a fatura do cartão (aba Contas) para ver à vista e parcelado." });
       }
@@ -1562,7 +1573,22 @@
     return `${d}/${m}`;
   }
 
-  let cardStatementFilter = null;
+  function payToggleHtml(active, cashTotal, instTotal) {
+    return `<div class="pay-toggle" role="tablist" aria-label="À vista ou parcelado">
+      <button type="button" class="pay-toggle-btn${active === "cash" ? " active" : ""}" data-pay-tab="cash" role="tab" aria-selected="${active === "cash"}">
+        À vista
+        <span class="pay-toggle-amt">R$ ${formatMoney(cashTotal)}</span>
+      </button>
+      <button type="button" class="pay-toggle-btn${active === "installment" ? " active" : ""}" data-pay-tab="installment" role="tab" aria-selected="${active === "installment"}">
+        Parcelado
+        <span class="pay-toggle-amt">R$ ${formatMoney(instTotal)}</span>
+      </button>
+    </div>`;
+  }
+
+  let homePayTab = "cash";
+  let cardPayTab = "cash";
+  let cardCatFilter = null;
 
   function stmtPayType(item) {
     const Imp = window.MinhasDespesasImport;
@@ -1576,41 +1602,77 @@
     return Imp?.parseInstallment ? Imp.parseInstallment(item?.label) : null;
   }
 
-  function stmtFilterKey(pay, cat) {
-    return `${pay || ""}:${cat || ""}`;
+  /** Parcelas desta fatura + o que ainda deve cair nas próximas (mesmo valor x parcelas que faltam). */
+  function installmentOutlook(items) {
+    let thisMonth = 0;
+    let remaining = 0;
+    let open = 0;
+    (items || []).forEach((it) => {
+      if (isItauRenegLabel(it.label)) return;
+      if (stmtPayType(it) !== "installment") return;
+      const amt = Number(it.amount) || 0;
+      thisMonth += amt;
+      const inst = stmtInstallment(it);
+      if (inst && inst.total >= 2 && inst.current >= 1 && inst.current < inst.total) {
+        remaining += amt * (inst.total - inst.current);
+        open++;
+      }
+    });
+    return {
+      thisMonth: Math.round(thisMonth * 100) / 100,
+      remaining: Math.round(remaining * 100) / 100,
+      open,
+    };
   }
 
-  function renderStmtCatGroup(items, pay, Imp) {
+  function installmentOutlookHtml(items, nextEst) {
+    const o = installmentOutlook(items);
+    const next = Number(nextEst) || 0;
+    const openTotal = Math.round((o.thisMonth + o.remaining) * 100) / 100;
+    if (o.thisMonth <= 0 && o.remaining <= 0) {
+      return `<div class="stmt-inst-outlook">
+        <p class="hint" style="margin:0">Nenhuma parcela identificada nesta fatura (procure nomes com 03/10, 2/6…).</p>
+      </div>`;
+    }
+    return `<div class="stmt-inst-outlook">
+      <div class="stmt-inst-row">
+        <span>Cai nesta fatura</span>
+        <strong>R$ ${formatMoney(o.thisMonth)}</strong>
+      </div>
+      <div class="stmt-inst-row">
+        <span>Ainda falta depois</span>
+        <strong>R$ ${formatMoney(o.remaining)}</strong>
+      </div>
+      <div class="stmt-inst-row stmt-inst-row--total">
+        <span>Parcelado em aberto</span>
+        <strong>R$ ${formatMoney(openTotal)}</strong>
+      </div>
+      ${o.open ? `<p class="hint">${o.open} compra(s) ainda têm parcelas pela frente (estimativa: mesma parcela até acabar).</p>` : ""}
+      ${next > 0 ? `<p class="hint">O banco já aponta ~R$ ${formatMoney(next)} na próxima fatura.</p>` : ""}
+    </div>`;
+  }
+
+  function renderStmtCatRows(items, pay, Imp) {
     const { byCategory, total } = Imp
       ? Imp.summarizeByCategory(items)
       : { byCategory: {}, total: items.reduce((s, i) => s + (Number(i.amount) || 0), 0) };
     const cats = Imp ? Imp.CATEGORIES : [];
-    const title = pay === "installment" ? "Parcelado" : "À vista";
-    const icon = pay === "installment" ? "📑" : "💵";
-    const groupActive = cardStatementFilter && cardStatementFilter.pay === pay && !cardStatementFilter.cat;
     const rows = cats
       .filter((c) => (byCategory[c.id] || 0) > 0)
       .sort((a, b) => (byCategory[b.id] || 0) - (byCategory[a.id] || 0))
       .map((c) => {
         const amt = byCategory[c.id] || 0;
         const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
-        const active = cardStatementFilter && cardStatementFilter.pay === pay && cardStatementFilter.cat === c.id;
-        return `<button type="button" class="stmt-cat-row${active ? " active" : ""}" data-pay-filter="${pay}" data-cat-filter="${c.id}">
+        const active = cardCatFilter === c.id;
+        return `<button type="button" class="stmt-cat-row${active ? " active" : ""}" data-cat-filter="${c.id}">
           <span class="stmt-cat-label">${c.icon} ${c.label}</span>
           <span class="stmt-cat-bar"><span style="width:${pct}%"></span></span>
           <span class="stmt-cat-amt">R$ ${formatMoney(amt)}</span>
         </button>`;
       })
       .join("");
-    if (!items.length) return "";
-    return `
-      <div class="stmt-pay-group">
-        <button type="button" class="stmt-pay-head${groupActive ? " active" : ""}" data-pay-filter="${pay}" data-cat-filter="">
-          <span>${icon} ${title}</span>
-          <strong>R$ ${formatMoney(total)}</strong>
-        </button>
-        ${rows || '<p class="hint">Nenhum lançamento neste grupo.</p>'}
-      </div>`;
+    if (!items.length) return '<p class="hint">Nenhum lançamento neste grupo.</p>';
+    return rows || '<p class="hint">Nenhum lançamento neste grupo.</p>';
   }
 
   function renderStmtItem(it, Imp) {
@@ -1645,7 +1707,7 @@
 
     const Imp = window.MinhasDespesasImport;
     if (!stmt || !stmt.items || !stmt.items.length) {
-      cardStatementFilter = null;
+      cardCatFilter = null;
       summary.classList.add("hidden");
       summary.innerHTML = "";
       list.innerHTML = '<p class="empty-state">Nenhuma fatura importada neste mês. Exporte CSV/OFX no banco e toque em Importar.</p>';
@@ -1663,11 +1725,13 @@
     const total = cashTotal + instTotal;
     const itauTotal = itauItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
 
-    if (cardStatementFilter) {
-      const pool = cardStatementFilter.pay === "installment" ? instItems : cashItems;
-      const { byCategory } = Imp ? Imp.summarizeByCategory(pool) : { byCategory: {} };
-      if (cardStatementFilter.cat && !(byCategory[cardStatementFilter.cat] > 0)) cardStatementFilter = null;
-    }
+    if (cardPayTab === "cash" && !cashItems.length && instItems.length) cardPayTab = "installment";
+    if (cardPayTab === "installment" && !instItems.length && cashItems.length) cardPayTab = "cash";
+
+    const tabItems = cardPayTab === "installment" ? instItems.concat(itauItems) : cashItems;
+    const tabCardItems = cardPayTab === "installment" ? instItems : cashItems;
+    const { byCategory } = Imp ? Imp.summarizeByCategory(tabCardItems) : { byCategory: {} };
+    if (cardCatFilter && !(byCategory[cardCatFilter] > 0)) cardCatFilter = null;
 
     summary.classList.remove("hidden");
     summary.innerHTML = `
@@ -1678,69 +1742,49 @@
         </div>
         <strong class="amt-neg">R$ ${formatMoney(total)}</strong>
       </div>
-      <div class="stmt-pay-totals">
-        <span>💵 À vista <strong>R$ ${formatMoney(cashTotal)}</strong></span>
-        <span>📑 Parcelado <strong>R$ ${formatMoney(instTotal)}</strong></span>
-      </div>
-      ${renderStmtCatGroup(cashItems, "cash", Imp)}
-      ${renderStmtCatGroup(instItems, "installment", Imp)}
+      ${payToggleHtml(cardPayTab, cashTotal, instTotal)}
+      ${installmentOutlookHtml(cardItems, stmt.nextInvoiceEstimate)}
+      ${renderStmtCatRows(tabCardItems, cardPayTab, Imp)}
       <p class="hint" style="margin-top:0.65rem">
-        Toque em <strong>À vista</strong> ou <strong>Parcelado</strong> — ou numa categoria — para filtrar.
+        Toque numa categoria para filtrar.
         ${itauTotal > 0 ? `Reneg. Itaú (${itauItems.length} parc.): <strong>R$ ${formatMoney(itauTotal)}</strong> → conta Empréstimo.` : ""}
       </p>
     `;
 
-    summary.querySelectorAll("[data-pay-filter]").forEach((btn) => {
+    summary.querySelectorAll("[data-pay-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const pay = btn.dataset.payFilter;
-        const cat = btn.dataset.catFilter || "";
-        const next = { pay, cat: cat || null };
-        const same = cardStatementFilter
-          && stmtFilterKey(cardStatementFilter.pay, cardStatementFilter.cat) === stmtFilterKey(next.pay, next.cat);
-        cardStatementFilter = same ? null : next;
+        cardPayTab = btn.dataset.payTab === "installment" ? "installment" : "cash";
+        cardCatFilter = null;
+        renderCardStatement();
+      });
+    });
+    summary.querySelectorAll("[data-cat-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const catId = btn.dataset.catFilter;
+        cardCatFilter = cardCatFilter === catId ? null : catId;
         renderCardStatement();
       });
     });
 
-    const filteredItems = stmt.items.filter((it) => {
-      if (!cardStatementFilter) return true;
-      if (isItauRenegLabel(it.label) && cardStatementFilter.pay === "cash") return false;
-      if (cardStatementFilter.pay && stmtPayType(it) !== cardStatementFilter.pay && !isItauRenegLabel(it.label)) return false;
-      if (cardStatementFilter.cat && it.category !== cardStatementFilter.cat) return false;
+    const filteredItems = tabItems.filter((it) => {
+      if (cardCatFilter && it.category !== cardCatFilter) return false;
       return true;
     });
 
-    const filterLabel = (() => {
-      if (!cardStatementFilter) return "";
-      const payLabel = cardStatementFilter.pay === "installment" ? "Parcelado" : "À vista";
-      const catLabel = cardStatementFilter.cat && Imp ? Imp.categoryMeta(cardStatementFilter.cat).label : "";
-      return catLabel ? `${payLabel} · ${catLabel}` : payLabel;
-    })();
-
-    const filterNote = cardStatementFilter
+    const filterNote = cardCatFilter
       ? `<div class="stmt-filter-note">
-          Filtrando <strong>${escapeAttr(filterLabel)}</strong>
-          (${filteredItems.length} de ${stmt.items.length})
+          Filtrando <strong>${escapeAttr(Imp ? Imp.categoryMeta(cardCatFilter).label : cardCatFilter)}</strong>
+          (${filteredItems.length} de ${tabItems.length})
           <button type="button" class="btn btn-ghost btn-sm" id="btnClearCatFilter">Limpar filtro</button>
         </div>`
       : "";
 
-    const visibleCash = filteredItems.filter((it) => !isItauRenegLabel(it.label) && stmtPayType(it) === "cash");
-    const visibleInst = filteredItems.filter((it) => isItauRenegLabel(it.label) || stmtPayType(it) === "installment");
     const sortItems = (arr) => arr.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-
-    const listGroup = (title, items) => {
-      if (!items.length) return "";
-      return `<p class="bills-group-title">${title}</p>${sortItems(items).map((it) => renderStmtItem(it, Imp)).join("")}`;
-    };
-
-    const body = listGroup("À vista", visibleCash) + listGroup("Parcelado", visibleInst);
-    list.innerHTML = filterNote + (body || (cardStatementFilter
-      ? '<p class="empty-state">Nenhum lançamento nesse filtro.</p>'
-      : ""));
+    const body = sortItems(filteredItems).map((it) => renderStmtItem(it, Imp)).join("");
+    list.innerHTML = filterNote + (body || '<p class="empty-state">Nenhum lançamento nesse filtro.</p>');
 
     $("#btnClearCatFilter")?.addEventListener("click", () => {
-      cardStatementFilter = null;
+      cardCatFilter = null;
       renderCardStatement();
     });
 
@@ -1897,7 +1941,7 @@
     const ym = getMonth();
     const data = ensureMonth(ym);
     data.cardStatement = null;
-    cardStatementFilter = null;
+    cardCatFilter = null;
     saveMonth(ym, data);
     renderAll();
     toast("Fatura removida deste mês");
@@ -1922,7 +1966,7 @@
 
     refMonth.addEventListener("change", () => {
       projOpenMonth = null;
-      cardStatementFilter = null;
+      cardCatFilter = null;
       renderAll();
     });
 

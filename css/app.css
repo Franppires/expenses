@@ -8,7 +8,7 @@
   --surface-solid: #ffffff;
   --surface-tint: rgba(255, 255, 255, 0.5);
   --table-head-bg: #eef2f7;
-  --header-bg: rgba(241, 245, 249, 0.88);
+  --header-bg: var(--bg1);
   --line: #e2e8f0;
   --line-strong: #cbd5e1;
   --text: #0f172a;
@@ -67,7 +67,7 @@
     --surface-solid: #1d212a;
     --surface-tint: rgba(255, 255, 255, 0.04);
     --table-head-bg: #1d212a;
-    --header-bg: rgba(15, 17, 21, 0.85);
+    --header-bg: var(--bg1);
     --line: #2a2f3a;
     --line-strong: #3a4150;
     --text: #e7e9ee;
@@ -107,7 +107,7 @@
   --surface-solid: #1d212a;
   --surface-tint: rgba(255, 255, 255, 0.04);
   --table-head-bg: #1d212a;
-  --header-bg: rgba(15, 17, 21, 0.85);
+  --header-bg: var(--bg1);
   --line: #2a2f3a;
   --line-strong: #3a4150;
   --text: #e7e9ee;
@@ -214,10 +214,8 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
-  background: var(--header-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+  background: var(--bg1);
+  border-bottom: 1px solid var(--line);
 }
 
 .app-top h1 {
@@ -1342,6 +1340,87 @@ select:focus-visible,
 
 .stmt-pay-totals strong { color: var(--text); }
 
+.pay-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+}
+
+.pay-toggle-btn {
+  appearance: none;
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  min-height: 2.7rem;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+}
+
+.pay-toggle-btn .pay-toggle-amt {
+  font-size: 0.8125rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit;
+}
+
+.pay-toggle-btn:hover { color: var(--text); }
+
+.pay-toggle-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.stmt-inst-outlook {
+  margin-bottom: 0.75rem;
+  padding: 0.7rem 0.75rem;
+  background: var(--warn-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+}
+
+.stmt-inst-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+.stmt-inst-row strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.stmt-inst-row--total {
+  margin-top: 0.35rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.stmt-inst-outlook .hint { margin-top: 0.45rem; }
+
 .stmt-pay-group {
   margin-bottom: 0.85rem;
 }
@@ -1588,10 +1667,8 @@ select:focus-visible,
 
   .app-top {
     padding-top: 1.75rem;
-    background: transparent;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    border-bottom: none;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--line);
   }
 
   .app-top h1 { font-size: 1.5rem; }
