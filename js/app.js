@@ -1115,6 +1115,186 @@
     }
   }
 
+  function merchantKey(label) {
+    return String(label || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/\d{1,2}\s*\/\s*\d{1,2}/g, " ")
+      .replace(/[^A-Z0-9]+/g, " ")
+      .trim()
+      .slice(0, 28);
+  }
+
+  function buildInsights(ym, data, s) {
+    const out = [];
+    const Imp = window.MinhasDespesasImport;
+    const cardItems = (data.cardStatement?.items || []).filter((it) => !isItauRenegLabel(it.label));
+
+    const overdue = [];
+    getAllBills(data).forEach((b) => {
+      const n = normalizeBill(data.bills[b.id]);
+      if (n.amount > 0 && isOverdue(n)) overdue.push({ label: b.label, amount: n.amount });
+    });
+    (data.extras || []).forEach((ex) => {
+      const e = normalizeExtra(ex);
+      if (e.amount > 0 && isOverdue(e)) overdue.push({ label: e.label || "Gasto extra", amount: e.amount });
+    });
+    if (overdue.length) {
+      const tot = overdue.reduce((a, x) => a + x.amount, 0);
+      out.push({
+        level: "warn",
+        icon: "⏰",
+        go: "bills",
+        title: overdue.length === 1 ? "1 conta atrasada" : `${overdue.length} contas atrasadas`,
+        text: `Soma R$ ${formatMoney(tot)} · ${overdue.slice(0, 2).map((x) => x.label).join(", ")}${overdue.length > 2 ? "…" : ""}`,
+      });
+    }
+
+    if (s.ask > 0) {
+      out.push({
+        level: "need",
+        icon: "💬",
+        go: "income",
+        title: "Falta dinheiro neste mês",
+        text: `Peça R$ ${formatMoney(s.ask)} ao marido para cobrir o que já está lançado.`,
+      });
+    }
+
+    const outlook = installmentOutlook(cardItems);
+    if (outlook.thisMonth > 0 || outlook.remaining > 0) {
+      out.push({
+        level: "info",
+        icon: "📑",
+        go: "bills",
+        title: `Parcelado em aberto: R$ ${formatMoney(outlook.thisMonth + outlook.remaining)}`,
+        text: `R$ ${formatMoney(outlook.thisMonth)} cai nesta fatura` +
+          (outlook.remaining > 0 ? ` · ainda faltam R$ ${formatMoney(outlook.remaining)} nas próximas` : "") +
+          (outlook.open ? ` · ${outlook.open} compra(s) em andamento` : ""),
+      });
+    }
+
+    const subs = cardItems.filter((it) => it.category === "assinaturas");
+    if (subs.length) {
+      const tot = subs.reduce((a, x) => a + (Number(x.amount) || 0), 0);
+      out.push({
+        level: "info",
+        icon: "📱",
+        go: "bills",
+        title: `Assinaturas: R$ ${formatMoney(tot)}`,
+        text: subs.slice(0, 3).map((x) => x.label).join(" · ") + (subs.length > 3 ? "…" : ""),
+      });
+    }
+
+    const dupMap = new Map();
+    cardItems.forEach((it) => {
+      const key = merchantKey(it.label) + "|" + (Number(it.amount) || 0).toFixed(2);
+      if (!merchantKey(it.label)) return;
+      if (!dupMap.has(key)) dupMap.set(key, []);
+      dupMap.get(key).push(it);
+    });
+    const dups = [...dupMap.values()].filter((list) => list.length >= 2);
+    if (dups.length) {
+      const first = dups[0];
+      out.push({
+        level: "warn",
+        icon: "🔁",
+        go: "bills",
+        title: "Possível cobrança repetida",
+        text: `${first.length}× ${first[0].label} de R$ ${formatMoney(first[0].amount)}` +
+          (dups.length > 1 ? ` · +${dups.length - 1} outro(s) caso(s)` : ""),
+      });
+    }
+
+    const prev = peekMonth(addMonths(ym, -1));
+    if (prev) {
+      const prevS = summarize(ensureMonthShape(JSON.parse(JSON.stringify(prev))));
+      const delta = s.totalExpenses - prevS.totalExpenses;
+      if (prevS.totalExpenses > 0 && Math.abs(delta) >= 80) {
+        const pct = Math.round((delta / prevS.totalExpenses) * 100);
+        out.push({
+          level: delta > 0 ? "warn" : "ok",
+          icon: delta > 0 ? "📈" : "📉",
+          go: "home",
+          title: delta > 0 ? "Gastos subiram neste mês" : "Gastos caíram neste mês",
+          text: `${pct > 0 ? "+" : ""}${pct}% em relação a ${formatMonthTitle(addMonths(ym, -1))} (R$ ${formatMoney(delta)})`,
+        });
+      }
+
+      const prevCard = (prev.cardStatement?.items || []).filter((it) => !isItauRenegLabel(it.label));
+      if (Imp && cardItems.length && prevCard.length) {
+        const cur = Imp.summarizeByCategory(cardItems).byCategory;
+        const old = Imp.summarizeByCategory(prevCard).byCategory;
+        let worst = null;
+        Imp.CATEGORIES.forEach((c) => {
+          const now = cur[c.id] || 0;
+          const then = old[c.id] || 0;
+          if (now < 80 || then <= 0) return;
+          const jump = (now - then) / then;
+          if (jump >= 0.4 && (!worst || jump > worst.jump)) {
+            worst = { c, now, then, jump };
+          }
+        });
+        if (worst) {
+          out.push({
+            level: "warn",
+            icon: worst.c.icon,
+            go: "bills",
+            title: `${worst.c.label} saiu do padrão`,
+            text: `R$ ${formatMoney(worst.now)} nesta fatura vs R$ ${formatMoney(worst.then)} no mês passado (+${Math.round(worst.jump * 100)}%).`,
+          });
+        }
+      }
+    }
+
+    const nextYm = addMonths(ym, 1);
+    const nextData = peekMonth(nextYm);
+    const nextCard = normalizeBill(nextData?.bills?.card);
+    if (nextCard.estimated && nextCard.amount > 0) {
+      out.push({
+        level: "info",
+        icon: "🔮",
+        go: "projection",
+        title: "Próxima fatura já tem estimativa",
+        text: `Cartão de ${formatMonthTitle(nextYm)}: R$ ${formatMoney(nextCard.amount)} (some quando você importar a fatura).`,
+      });
+    }
+
+    if (s.pending <= 0 && s.totalExpenses > 0) {
+      out.push({
+        level: "ok",
+        icon: "✅",
+        go: "home",
+        title: "Nada pendente de pagamento",
+        text: "As contas deste mês estão marcadas como pagas.",
+      });
+    }
+
+    const rank = { warn: 0, need: 1, info: 2, ok: 3 };
+    return out.sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9)).slice(0, 7);
+  }
+
+  function renderInsights(ym, data, s) {
+    const host = $("#insightList");
+    if (!host) return;
+    const insights = buildInsights(ym, data, s);
+    if (!insights.length) {
+      host.innerHTML = '<p class="empty-state">Nada urgente por agora. Importe a fatura para eu apontar parcelas, assinaturas e gastos fora do padrão.</p>';
+      return;
+    }
+    host.innerHTML = insights.map((i) => `
+      <button type="button" class="insight-item insight-${i.level}" data-go="${i.go || "bills"}">
+        <span class="insight-icon">${i.icon}</span>
+        <span class="insight-body">
+          <span class="insight-title">${escapeAttr(i.title)}</span>
+          <span class="insight-text">${escapeAttr(i.text)}</span>
+        </span>
+      </button>`).join("");
+    host.querySelectorAll("[data-go]").forEach((btn) => {
+      btn.addEventListener("click", () => switchView(btn.dataset.go || "bills"));
+    });
+  }
+
   function renderHome() {
     const ym = getMonth();
     const data = ensureMonth(ym);
@@ -1150,6 +1330,8 @@
         <div class="metric"><span class="metric-label">Falta pagar</span><strong class="metric-value">R$ ${formatMoney(s.pending)}</strong></div>
         <div class="metric metric--wide"><span class="metric-label">Sobra do mês</span><strong class="metric-value ${balClass}">R$ ${formatMoney(s.balance)}</strong></div>`;
     }
+
+    renderInsights(ym, data, s);
 
     const upcoming = $("#upcomingList");
     if (upcoming) {

@@ -599,6 +599,60 @@ select:focus-visible,
   line-height: 1.5;
 }
 
+.insight-card { margin: 0.85rem 0 1rem; }
+
+.insight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.insight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  padding: 0.7rem 0.75rem;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.insight-item:hover { border-color: var(--line-strong); }
+
+.insight-item.insight-warn { border-left: 3px solid var(--warn); }
+.insight-item.insight-need { border-left: 3px solid var(--expense); }
+.insight-item.insight-ok { border-left: 3px solid var(--income); }
+.insight-item.insight-info { border-left: 3px solid var(--brand); }
+
+.insight-icon {
+  font-size: 1.1rem;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.insight-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.insight-title {
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.insight-text {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 /* ——— Métricas ——— */
 .metric-grid {
   display: grid;
