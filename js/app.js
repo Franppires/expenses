@@ -1604,13 +1604,23 @@
     const body = $("#projectionBody");
     if (!body) return;
     const base = ensureMonth(baseYm);
+    let horizon = 6;
+    for (let i = 7; i <= 12; i++) {
+      const ahead = peekMonth(addMonths(baseYm, i));
+      const cardEst = normalizeBill(ahead?.bills?.card).estimated;
+      const itauEst = normalizeBill(ahead?.bills?.itau).estimated;
+      if (cardEst || itauEst) horizon = i;
+    }
     let html = "";
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= horizon; i++) {
       const m = addMonths(baseYm, i);
       const hasSaved = !!localStorage.getItem(storageKey(m));
       const data = getProjectionPayload(m, base);
       const s = summarize(data);
-      const badge = hasSaved ? '<span class="badge badge-paid">Salvo</span>' : '<span class="badge badge-pending">Espelho</span>';
+      const cardEst = normalizeBill(data.bills?.card).estimated && normalizeBill(data.bills?.card).amount > 0;
+      const badge = cardEst
+        ? '<span class="badge badge-partial">Parcelas</span>'
+        : (hasSaved ? '<span class="badge badge-paid">Salvo</span>' : '<span class="badge badge-pending">Espelho</span>');
       const askC = s.ask > 0 ? "amt-neg" : "amt-pos";
       const balC = s.balance < 0 ? "amt-neg" : s.balance > 0 ? "amt-pos" : "";
       html += `<tr>
@@ -2030,44 +2040,85 @@
   }
 
   /**
-   * Próximo mês:
-   * - Cartão: saldo de compras parceladas (sem Reneg. Itaú) ou fallback das parcelas 0X/0Y
-   * - Empréstimo Itaú: soma das próximas Reneg. (ex. 43/70 + 43/60)
-   * Valores estimados somem quando importar a fatura daquele mês.
+   * Cada parcela (03/10, 42/70…) vira o mesmo valor nos meses seguintes,
+   * até acabar. Mês que já tem fatura importada não é mexido — o valor real fica.
+   * No mês imediatamente seguinte, se o PDF trouxer "saldo de parceladas", usa esse número.
    */
-  function applyNextMonthEstimate(ym, parsed) {
+  function projectInstallmentsAhead(ym, parsed) {
+    const MAX_AHEAD = 18;
     const items = parsed?.items || [];
-    const itauItems = items.filter((i) => isItauRenegLabel(i.label));
-    const cardItems = items.filter((i) => !isItauRenegLabel(i.label));
+    const source = peekMonth(ym) || ensureMonth(ym);
+    const schedule = new Map();
 
-    const itauNext = estimateNextFromInstallments(itauItems);
-    let cardNext = Number(parsed?.nextInvoiceEstimate) || 0;
-    if (cardNext > 0) {
-      // O "saldo de parceladas" do PDF costuma incluir a Reneg. Itaú — tira dela.
-      cardNext = Math.max(0, Math.round((cardNext - itauNext) * 100) / 100);
-    } else {
-      cardNext = estimateNextFromInstallments(cardItems);
-    }
-
-    const nm = addMonths(ym, 1);
-    const ndata = ensureMonth(nm);
-    if (!ndata.bills) ndata.bills = {};
-
-    if (cardNext > 0) {
-      const cur = normalizeBill(ndata.bills.card);
-      if (!(cur.amount > 0 && !cur.estimated)) {
-        ndata.bills.card = { ...cur, amount: cardNext, estimated: true };
+    items.forEach((it) => {
+      const inst = stmtInstallment(it);
+      if (!inst || !(inst.total >= 2) || !(inst.current >= 1) || inst.current >= inst.total) return;
+      const bucket = isItauRenegLabel(it.label) ? "itau" : "card";
+      const amt = Number(it.amount) || 0;
+      if (amt <= 0) return;
+      const left = Math.min(inst.total - inst.current, MAX_AHEAD);
+      for (let step = 1; step <= left; step++) {
+        if (!schedule.has(step)) schedule.set(step, { card: 0, itau: 0 });
+        schedule.get(step)[bucket] += amt;
       }
-    }
-    if (itauNext > 0) {
-      const cur = normalizeBill(ndata.bills.itau);
-      if (!(cur.amount > 0 && !cur.estimated)) {
-        ndata.bills.itau = { ...cur, amount: itauNext, estimated: true };
-      }
+    });
+
+    const itauNext = Math.round((schedule.get(1)?.itau || 0) * 100) / 100;
+    let bankNext = Number(parsed?.nextInvoiceEstimate) || 0;
+    if (bankNext > 0) {
+      bankNext = Math.max(0, Math.round((bankNext - itauNext) * 100) / 100);
+      if (!schedule.has(1)) schedule.set(1, { card: 0, itau: itauNext });
+      schedule.get(1).card = bankNext;
     }
 
-    if (cardNext > 0 || itauNext > 0) saveMonth(nm, ndata);
-    return { cardNext, itauNext };
+    const sourceItau = normalizeBill(source.bills?.itau).amount;
+    let months = 0;
+    let cardNext = 0;
+
+    for (let step = 1; step <= MAX_AHEAD; step++) {
+      const target = addMonths(ym, step);
+      const slot = schedule.get(step) || { card: 0, itau: 0 };
+      const wantCard = Math.round(slot.card * 100) / 100;
+      const wantItau = Math.round(slot.itau * 100) / 100;
+      const existing = peekMonth(target);
+      if (existing?.cardStatement?.items?.length) continue;
+
+      const data = existing || buildCarryForwardMonth(target, source);
+      if (!data.bills) data.bills = {};
+      if (!data.bills.card) data.bills.card = emptyBill();
+      if (!data.bills.itau) data.bills.itau = emptyBill();
+
+      if (!existing && wantCard <= 0 && wantItau <= 0) continue;
+
+      let changed = !existing;
+      const card = normalizeBill(data.bills.card);
+      const itau = normalizeBill(data.bills.itau);
+      const carriedItau = Math.abs(itau.amount - sourceItau) < 0.009;
+
+      if (wantCard > 0 && (card.estimated || !(card.amount > 0))) {
+        data.bills.card = { ...card, amount: wantCard, estimated: true, status: "pending", paidDate: "", paidPart: 0 };
+        changed = true;
+      } else if (wantCard <= 0 && card.estimated) {
+        data.bills.card = { ...card, amount: 0, estimated: false };
+        changed = true;
+      }
+
+      if (wantItau > 0 && (itau.estimated || !(itau.amount > 0) || carriedItau)) {
+        data.bills.itau = { ...itau, amount: wantItau, estimated: true, status: "pending", paidDate: "", paidPart: 0 };
+        changed = true;
+      } else if (wantItau <= 0 && itau.estimated) {
+        data.bills.itau = { ...itau, amount: 0, estimated: false };
+        changed = true;
+      }
+
+      if (changed) {
+        saveMonth(target, data);
+        if (wantCard > 0 || wantItau > 0) months++;
+      }
+      if (step === 1) cardNext = wantCard;
+    }
+
+    return { cardNext, itauNext, months };
   }
 
   function importCardStatementFile(file) {
@@ -2097,7 +2148,7 @@
         data.cardStatement = parsed;
         applyCardStatementToBill(data);
         saveMonth(ym, data);
-        const nextEst = applyNextMonthEstimate(ym, parsed);
+        const nextEst = projectInstallmentsAhead(ym, parsed);
         renderAll();
         const itauCount = (parsed.items || []).filter((i) => isItauRenegLabel(i.label)).length;
         if (total > 25000) {
@@ -2105,8 +2156,7 @@
         } else {
           let msg = `${parsed.items.length} lançamentos · cartão R$ ${formatMoney(total - (parsed.items.filter((i) => isItauRenegLabel(i.label)).reduce((s, i) => s + i.amount, 0)))}`;
           if (itauCount) msg += ` · Itaú ${itauCount} parc.`;
-          if (nextEst?.cardNext > 0) msg += ` · próx. cartão ~R$ ${formatMoney(nextEst.cardNext)}`;
-          if (nextEst?.itauNext > 0) msg += ` · próx. Itaú ~R$ ${formatMoney(nextEst.itauNext)}`;
+          if (nextEst?.months > 0) msg += ` · parcelas previstas em ${nextEst.months} mês(es)`;
           toast(msg);
         }
       } catch (e) {

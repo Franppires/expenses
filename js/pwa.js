@@ -3,7 +3,7 @@
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js?v=17").then((reg) => {
+      navigator.serviceWorker.register("./sw.js?v=18").then((reg) => {
         reg.update();
       }).catch(() => {});
       navigator.serviceWorker.getRegistrations?.().then((regs) => {
